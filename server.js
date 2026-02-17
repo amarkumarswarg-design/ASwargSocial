@@ -1,11 +1,14 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const mongoose = require('mongoose');
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cloudinary = require('cloudinary').v2;
+
+// Import models
 const User = require('./models/User');
 const Post = require('./models/Post');
 const Counter = require('./models/Counter');
@@ -18,6 +21,9 @@ const io = socketIo(server, { cors: { origin: '*' } }); // Configure CORS as nee
 // Middleware
 app.use(express.json({ limit: '50mb' })); // for large payloads (DP uploads)
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from the "public" folder
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Cloudinary config
 cloudinary.config({
@@ -47,7 +53,6 @@ async function generateSSN() {
     { new: true, upsert: true }
   );
   const num = counter.seq;
-  // Pad to 4 digits: 0001, 0002, ...
   const padded = num.toString().padStart(4, '0');
   return `+1(212)908-${padded}`;
 }
@@ -81,7 +86,7 @@ io.use((socket, next) => {
   jwt.verify(token, JWT_SECRET, (err, decoded) => {
     if (err) return next(new Error('Authentication error'));
     socket.userId = decoded.id;
-    socket.user = decoded; // store minimal user info
+    socket.user = decoded;
     next();
   });
 });
@@ -89,16 +94,12 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.userId);
 
-  // Join a room with user's own ID for private messages
   socket.join(socket.userId);
 
-  // Handle private messaging
   socket.on('private message', async (data) => {
-    // data: { to: userId, content, media }
     const { to, content, media } = data;
     // Check block status (implement Block model and check)
-    // Save message to DB (Message model)
-    // Emit to recipient's room
+    // Save message to DB (Message model) – to be implemented
     io.to(to).emit('private message', {
       from: socket.userId,
       content,
@@ -107,14 +108,12 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Handle group messaging (similar, but using group rooms)
-
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.userId);
   });
 });
 
-// ========== Routes ==========
+// ========== API Routes ==========
 
 // ---- Auth ----
 // Register
@@ -122,11 +121,9 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, username, password, profilePic, profilePicPublicId } = req.body;
 
-    // Check if username exists
     const existing = await User.findOne({ username: username.toLowerCase() });
     if (existing) return res.status(400).json({ error: 'Username already taken' });
 
-    // Generate unique SSN
     const ssn = await generateSSN();
 
     const user = new User({
@@ -151,7 +148,7 @@ app.post('/api/auth/register', async (req, res) => {
 // Login (username or SSN)
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { identifier, password } = req.body; // identifier can be username or ssn
+    const { identifier, password } = req.body;
 
     const user = await User.findOne({
       $or: [{ username: identifier.toLowerCase() }, { ssn: identifier }]
@@ -210,7 +207,6 @@ app.put('/api/users/me', authMiddleware, async (req, res) => {
     const updates = req.body;
     const user = req.user;
 
-    // If updating username, check uniqueness
     if (updates.username && updates.username !== user.username) {
       const existing = await User.findOne({ username: updates.username.toLowerCase() });
       if (existing) return res.status(400).json({ error: 'Username already taken' });
@@ -242,9 +238,8 @@ app.delete('/api/users/me', authMiddleware, async (req, res) => {
     const isMatch = await user.comparePassword(password);
     if (!isMatch) return res.status(400).json({ error: 'Invalid password' });
 
-    // Delete user's posts, messages, etc. (cascade – implement as needed)
     await Post.deleteMany({ user: user._id });
-    // Also delete from other collections (chats, groups, follows, blocks, etc.)
+    // Also delete from other collections (chats, groups, follows, blocks, etc.) – extend as needed
 
     await User.findByIdAndDelete(user._id);
     res.json({ message: 'Account deleted permanently' });
@@ -280,6 +275,19 @@ app.get('/api/posts/feed', authMiddleware, async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
+      .populate('user', 'name username profilePic')
+      .populate('comments.user', 'name username profilePic');
+    res.json(posts);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get posts by a specific user
+app.get('/api/posts/user/:userId', authMiddleware, async (req, res) => {
+  try {
+    const posts = await Post.find({ user: req.params.userId })
+      .sort({ createdAt: -1 })
       .populate('user', 'name username profilePic')
       .populate('comments.user', 'name username profilePic');
     res.json(posts);
@@ -353,15 +361,13 @@ app.post('/api/bot/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid bot credentials' });
     }
 
-    // Find or create bot user
     let bot = await User.findOne({ isBot: true });
     if (!bot) {
-      // Create bot user if not exists (with a dummy username/password)
       bot = new User({
         name: 'Swarg Social Bot',
         username: 'swargbot',
-        password: Math.random().toString(36), // random, never used for login
-        ssn: '+1(212)908-0000', // special SSN
+        password: Math.random().toString(36),
+        ssn: '+1(212)908-0000',
         isBot: true
       });
       await bot.save();
@@ -384,10 +390,7 @@ app.post('/api/bot/broadcast', authMiddleware, async (req, res) => {
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: 'Message required' });
 
-    // In a real implementation, you would create a system notification for every user
-    // This could be done via a background job. For simplicity, we'll just emit via socket
-    // to all connected clients (but they may not be online). Better to store in a Notifications collection.
-    // Here we emit to all sockets in the root room (or all users)
+    // Emit to all connected sockets
     io.emit('system notification', { message, from: 'Swarg Social Bot' });
 
     res.json({ success: true, message: 'Broadcast sent' });
@@ -396,8 +399,11 @@ app.post('/api/bot/broadcast', authMiddleware, async (req, res) => {
   }
 });
 
-// ---- Basic Follow, Block, Phonebook, Groups (placeholder routes) ----
-// You can extend with similar controllers
+// ========== Catch‑all Route (for SPA) ==========
+// This must be placed AFTER all API routes.
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // ========== Start Server ==========
 const PORT = process.env.PORT || 5000;
