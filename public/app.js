@@ -539,4 +539,150 @@ async function showFollowList(userId, type) {
         <button class="btn-secondary view-profile">View Profile</button>
       </div>
     `).join('');
-    modal.classList.add('a
+    modal.classList.add('active');
+
+    document.querySelectorAll(`#${type}-list .view-profile`).forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const uid = e.target.closest('.user-item').dataset.userId;
+        modal.classList.remove('active');
+        openProfile(uid);
+      });
+    });
+  } catch (err) { console.error(err); }
+}
+
+// ==================== Chats ====================
+async function renderChats() {
+  contentArea.innerHTML = `
+    <div class="view active" id="chats-view">
+      <div class="chats-list" id="chats-list"></div>
+      <div class="chat-window hidden" id="chat-window">
+        <div class="chat-header" id="chat-header"></div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-area">
+          <input type="text" id="chat-input" placeholder="Type a message...">
+          <button id="send-chat"><i class="fas fa-paper-plane"></i></button>
+        </div>
+      </div>
+    </div>
+  `;
+  await loadChatsList();
+}
+
+async function loadChatsList() {
+  try {
+    const chats = await apiRequest('/api/chats');
+    const list = document.getElementById('chats-list');
+    list.innerHTML = chats.map(c => `
+      <div class="chat-item" data-chat-id="${c._id}" data-user-id="${c.otherUser._id}">
+        <img src="${c.otherUser.profilePic || 'https://via.placeholder.com/50'}">
+        <div class="chat-info">
+          <div class="chat-name">${c.otherUser.name}</div>
+          <div class="chat-last">${c.lastMessage?.content || 'No messages'}</div>
+        </div>
+        <div class="chat-time">${c.lastMessage ? new Date(c.lastMessage.createdAt).toLocaleTimeString() : ''}</div>
+      </div>
+    `).join('');
+    document.querySelectorAll('.chat-item').forEach(item => {
+      item.addEventListener('click', () => openChat(item.dataset.userId, item.dataset.chatId));
+    });
+  } catch (err) { console.error(err); }
+}
+
+async function openChat(otherUserId, chatId) {
+  currentChatUser = otherUserId;
+  activeChatId = chatId;
+  document.getElementById('chats-list').classList.add('hidden');
+  document.getElementById('chat-window').classList.remove('hidden');
+
+  if (!chatId) {
+    // Need to get or create chat via API – we'll implement simple: if no chatId, fetch one
+    const chats = await apiRequest('/api/chats');
+    const found = chats.find(c => c.otherUser._id === otherUserId);
+    if (found) {
+      activeChatId = found._id;
+    } else {
+      // No chat yet; we'll create one on first message
+      activeChatId = null;
+    }
+  }
+
+  // Load messages if chatId exists
+  if (activeChatId) {
+    const msgs = await apiRequest(`/api/chats/${activeChatId}/messages`);
+    renderMessages(msgs);
+  } else {
+    document.getElementById('chat-messages').innerHTML = '';
+  }
+
+  document.getElementById('send-chat').onclick = sendChatMessage;
+  document.getElementById('chat-input').onkeypress = (e) => {
+    if (e.key === 'Enter') sendChatMessage();
+  };
+}
+
+function renderMessages(messages) {
+  const container = document.getElementById('chat-messages');
+  container.innerHTML = messages.map(m => `
+    <div class="message ${m.sender === currentUser._id ? 'own' : ''}">
+      ${m.content}
+      <span class="message-time">${new Date(m.createdAt).toLocaleTimeString()}</span>
+      ${m.sender === currentUser._id ? `<span class="message-status">${m.readBy?.length > 1 ? '✓✓' : '✓'}</span>` : ''}
+    </div>
+  `).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+// FIX: renamed from openChat to avoid collision
+function navigateToChat(userId) {
+  loadView('chats');
+  // Wait for chats to load then open specific chat
+  setTimeout(() => openChat(userId, null), 500);
+}
+
+// ==================== Messaging ====================
+async function sendChatMessage() {
+  const text = document.getElementById('chat-input').value.trim();
+  if (!text || !currentChatUser) return;
+
+  // Emit via socket – server will save and broadcast
+  socket.emit('private message', { to: currentChatUser, content: text });
+
+  // Optimistically add message to UI
+  const container = document.getElementById('chat-messages');
+  container.innerHTML += `
+    <div class="message own">
+      ${text}
+      <span class="message-time">${new Date().toLocaleTimeString()}</span>
+      <span class="message-status">✓</span>
+    </div>
+  `;
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('chat-input').value = '';
+}
+
+function handleIncomingMessage(data) {
+  if (currentChatUser && data.from === currentChatUser) {
+    const container = document.getElementById('chat-messages');
+    container.innerHTML += `
+      <div class="message">
+        ${data.content}
+        <span class="message-time">${new Date(data.createdAt).toLocaleTimeString()}</span>
+      </div>
+    `;
+    container.scrollTop = container.scrollHeight;
+  } else {
+    // Update chat list last message (simplified: just reload chats if in chats view)
+    if (document.getElementById('chats-view')?.classList.contains('active')) {
+      loadChatsList();
+    }
+  }
+}
+
+// ==================== Navigation Helpers ====================
+function openProfile(userId) {
+  loadView('profile', userId);
+}
+
+// Make functions global for onclick attributes
+window.openProfile = openProfile;
