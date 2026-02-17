@@ -32,12 +32,15 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// MongoDB connection
+// MongoDB connection with timeout fix
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
-  useUnifiedTopology: true
-}).then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
+  useUnifiedTopology: true,
+  connectTimeoutMS: 30000, // 30 seconds timeout
+  socketTimeoutMS: 45000,  // 45 seconds socket timeout
+})
+.then(() => console.log('MongoDB connected'))
+.catch(err => console.error('MongoDB connection error:', err));
 
 // JWT secret
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -119,29 +122,53 @@ io.on('connection', (socket) => {
 // Register
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, username, password, profilePic, profilePicPublicId } = req.body;
+    const { name, username, password, profilePic } = req.body;
 
+    // Check if username exists
     const existing = await User.findOne({ username: username.toLowerCase() });
     if (existing) return res.status(400).json({ error: 'Username already taken' });
 
+    // Generate unique SSN
     const ssn = await generateSSN();
 
+    // Upload profile picture to Cloudinary if provided
+    let profilePicUrl = '';
+    let profilePicPublicId = '';
+
+    if (profilePic && profilePic.startsWith('data:image')) {
+      try {
+        const uploadResult = await cloudinary.uploader.upload(profilePic, {
+          folder: 'swarg_social/profiles',   // optional folder
+          transformation: { width: 500, height: 500, crop: 'limit' } // optional
+        });
+        profilePicUrl = uploadResult.secure_url;
+        profilePicPublicId = uploadResult.public_id;
+      } catch (uploadErr) {
+        console.error('Cloudinary upload error:', uploadErr);
+        return res.status(500).json({ error: 'Failed to upload profile picture' });
+      }
+    }
+
+    // Create user
     const user = new User({
       name,
       username: username.toLowerCase(),
       password,
       ssn,
-      profilePic,
+      profilePic: profilePicUrl,
       profilePicPublicId
     });
 
     await user.save();
 
     const token = generateToken(user);
-    res.status(201).json({ user: { ...user.toObject(), password: undefined }, token });
+    res.status(201).json({ 
+      user: { ...user.toObject(), password: undefined }, 
+      token 
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Registration error:', err);
+    res.status(500).json({ error: 'Server error during registration' });
   }
 });
 
@@ -214,8 +241,26 @@ app.put('/api/users/me', authMiddleware, async (req, res) => {
     }
 
     if (updates.name) user.name = updates.name;
-    if (updates.profilePic) user.profilePic = updates.profilePic;
-    if (updates.profilePicPublicId) user.profilePicPublicId = updates.profilePicPublicId;
+    
+    // Handle profile picture update (if base64 provided)
+    if (updates.profilePic && updates.profilePic.startsWith('data:image')) {
+      try {
+        // Delete old image if exists
+        if (user.profilePicPublicId) {
+          await cloudinary.uploader.destroy(user.profilePicPublicId);
+        }
+        const uploadResult = await cloudinary.uploader.upload(updates.profilePic, {
+          folder: 'swarg_social/profiles',
+          transformation: { width: 500, height: 500, crop: 'limit' }
+        });
+        user.profilePic = uploadResult.secure_url;
+        user.profilePicPublicId = uploadResult.public_id;
+      } catch (uploadErr) {
+        console.error('Cloudinary upload error:', uploadErr);
+        return res.status(500).json({ error: 'Failed to upload profile picture' });
+      }
+    }
+
     if (updates.password) {
       user.password = updates.password; // will be hashed by pre-save
     }
@@ -238,8 +283,25 @@ app.delete('/api/users/me', authMiddleware, async (req, res) => {
     const isMatch = await user.comparePassword(password);
     if (!isMatch) return res.status(400).json({ error: 'Invalid password' });
 
+    // Delete profile picture from Cloudinary if exists
+    if (user.profilePicPublicId) {
+      await cloudinary.uploader.destroy(user.profilePicPublicId);
+    }
+
+    // Delete user's posts (and their media from Cloudinary)
+    const posts = await Post.find({ user: user._id });
+    for (const post of posts) {
+      if (post.media && post.media.length > 0) {
+        for (const media of post.media) {
+          if (media.publicId) {
+            await cloudinary.uploader.destroy(media.publicId);
+          }
+        }
+      }
+    }
     await Post.deleteMany({ user: user._id });
-    // Also delete from other collections (chats, groups, follows, blocks, etc.) – extend as needed
+
+    // Delete from other collections (chats, groups, follows, blocks, etc.) – extend as needed
 
     await User.findByIdAndDelete(user._id);
     res.json({ message: 'Account deleted permanently' });
