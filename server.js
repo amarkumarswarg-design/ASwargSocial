@@ -152,7 +152,8 @@ app.post('/api/auth/register', async (req, res) => {
         });
         profilePicUrl = upload.secure_url;
         profilePicPublicId = upload.public_id;
-      } catch {
+      } catch (uploadErr) {
+        console.error('Cloudinary upload error:', uploadErr);
         return res.status(500).json({ error: 'Failed to upload profile picture' });
       }
     }
@@ -169,7 +170,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     res.status(201).json({ user: { ...user.toObject(), password: undefined }, token: generateToken(user) });
   } catch (err) {
-    console.error(err);
+    console.error('Registration error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -325,8 +326,16 @@ app.post('/api/posts', authMiddleware, async (req, res) => {
     if (media && media.length) {
       for (const item of media) {
         if (item.url?.startsWith('data:image')) {
-          const upload = await cloudinary.uploader.upload(item.url, { folder: 'swarg_social/posts' });
-          processedMedia.push({ url: upload.secure_url, publicId: upload.public_id, type: 'image' });
+          try {
+            const upload = await cloudinary.uploader.upload(item.url, {
+              folder: 'swarg_social/posts',
+              timeout: 60000
+            });
+            processedMedia.push({ url: upload.secure_url, publicId: upload.public_id, type: 'image' });
+          } catch (uploadErr) {
+            console.error('Cloudinary upload error details:', uploadErr);
+            return res.status(500).json({ error: 'Image upload failed: ' + uploadErr.message });
+          }
         } else {
           processedMedia.push(item);
         }
@@ -337,7 +346,7 @@ app.post('/api/posts', authMiddleware, async (req, res) => {
     await post.populate('user', 'name username profilePic');
     res.status(201).json(post);
   } catch (err) {
-    console.error('Post upload error:', err);
+    console.error('Post creation error:', err);
     res.status(500).json({ error: 'Failed to create post' });
   }
 });
@@ -446,28 +455,6 @@ app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
     if (!chat) return res.status(404).json({ error: 'Chat not found' });
     const messages = await Message.find({ chat: chat._id }).sort({ createdAt: 1 });
     res.json(messages);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/messages', authMiddleware, async (req, res) => {
-  try {
-    const { to, content } = req.body;
-    let chat = await Chat.findOne({ participants: { $all: [req.user._id, to] } });
-    if (!chat) chat = new Chat({ participants: [req.user._id, to] });
-    const message = new Message({ chat: chat._id, sender: req.user._id, content, readBy: [req.user._id] });
-    await message.save();
-    chat.lastMessage = message._id;
-    chat.updatedAt = Date.now();
-    await chat.save();
-    io.to(to).emit('private message', {
-      _id: message._id,
-      from: req.user._id,
-      content,
-      createdAt: message.createdAt
-    });
-    res.json(message);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
