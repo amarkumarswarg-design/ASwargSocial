@@ -537,4 +537,133 @@ async function showFollowList(userId, type) {
     const list = document.getElementById(`${type}-list`);
     list.innerHTML = users.map(u => `
       <div class="user-item" data-user-id="${u._id}">
-        <img src="${u.profilePic || 'https://via.placeh
+        <img src="${u.profilePic || 'https://via.placeholder.com/40'}">
+        <div class="user-info">
+          <h4>${u.name}</h4>
+          <p>@${u.username}</p>
+        </div>
+        <button class="btn-secondary view-profile">View Profile</button>
+      </div>
+    `).join('');
+    modal.classList.add('active');
+
+    document.querySelectorAll(`#${type}-list .view-profile`).forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const uid = e.currentTarget.closest('.user-item').dataset.userId;
+        modal.classList.remove('active');
+        viewProfile(uid);
+      });
+    });
+  } catch (err) { console.error(err); }
+}
+
+function viewProfile(userId) {
+  loadView('profile');
+  renderProfile(userId);
+}
+
+// ==================== Chats ====================
+async function renderChats() {
+  contentArea.innerHTML = `
+    <div class="view active" id="chats-view">
+      <div class="chats-list" id="chats-list"></div>
+      <div class="chat-window hidden" id="chat-window">
+        <div class="chat-header" id="chat-header"></div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-area">
+          <input type="text" id="chat-input" placeholder="Type a message...">
+          <button id="send-chat"><i class="fas fa-paper-plane"></i></button>
+        </div>
+      </div>
+    </div>
+  `;
+  await loadChatsList();
+}
+
+async function loadChatsList() {
+  try {
+    const chats = await apiRequest('/api/chats'); // we'll need to create this endpoint
+    const list = document.getElementById('chats-list');
+    list.innerHTML = chats.map(c => `
+      <div class="chat-item" data-chat-id="${c._id}" data-user-id="${c.otherUser._id}">
+        <img src="${c.otherUser.profilePic || 'https://via.placeholder.com/50'}">
+        <div class="chat-info">
+          <div class="chat-name">${c.otherUser.name}</div>
+          <div class="chat-last">${c.lastMessage?.content || 'No messages'}</div>
+        </div>
+        <div class="chat-time">${c.lastMessage ? new Date(c.lastMessage.createdAt).toLocaleTimeString() : ''}</div>
+      </div>
+    `).join('');
+    document.querySelectorAll('.chat-item').forEach(item => {
+      item.addEventListener('click', () => openChat(item.dataset.userId, item.dataset.chatId));
+    });
+  } catch (err) { console.error(err); }
+}
+
+async function openChat(otherUserId, chatId) {
+  currentChatUser = otherUserId;
+  activeChatId = chatId;
+  document.getElementById('chats-list').classList.add('hidden');
+  document.getElementById('chat-window').classList.remove('hidden');
+  // Load messages
+  const msgs = await apiRequest(`/api/chats/${chatId}/messages`);
+  renderMessages(msgs);
+  document.getElementById('send-chat').onclick = sendChatMessage;
+  document.getElementById('chat-input').onkeypress = (e) => {
+    if (e.key === 'Enter') sendChatMessage();
+  };
+}
+
+function renderMessages(messages) {
+  const container = document.getElementById('chat-messages');
+  container.innerHTML = messages.map(m => `
+    <div class="message ${m.sender === currentUser._id ? 'own' : ''}">
+      ${m.content}
+      <span class="message-time">${new Date(m.createdAt).toLocaleTimeString()}</span>
+      ${m.sender === currentUser._id ? `<span class="message-status">${m.readBy?.includes(currentUser._id) ? '✓✓' : '✓'}</span>` : ''}
+    </div>
+  `).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function sendChatMessage() {
+  const text = document.getElementById('chat-input').value.trim();
+  if (!text || !currentChatUser) return;
+  // Emit via socket
+  socket.emit('private message', { to: currentChatUser, content: text, media: [] });
+  // Also save via HTTP (we need a POST /api/messages endpoint)
+  await apiRequest('/api/messages', {
+    method: 'POST',
+    body: JSON.stringify({ to: currentChatUser, content: text })
+  });
+  document.getElementById('chat-input').value = '';
+  // Optimistically add message
+  const container = document.getElementById('chat-messages');
+  container.innerHTML += `
+    <div class="message own">
+      ${text}
+      <span class="message-time">${new Date().toLocaleTimeString()}</span>
+      <span class="message-status">✓</span>
+    </div>
+  `;
+  container.scrollTop = container.scrollHeight;
+}
+
+function handleIncomingMessage(data) {
+  if (currentChatUser && data.from === currentChatUser) {
+    const container = document.getElementById('chat-messages');
+    container.innerHTML += `
+      <div class="message">
+        ${data.content}
+        <span class="message-time">${new Date(data.timestamp).toLocaleTimeString()}</span>
+      </div>
+    `;
+    container.scrollTop = container.scrollHeight;
+  } else {
+    // Update chat list last message
+  }
+}
+
+// ==================== Settings ====================
+// Settings view will be part of profile? We'll add a settings button in profile.
+// For simplicity, we can add a settings tab later.
