@@ -1,16 +1,16 @@
 // ==================== Configuration ====================
-const API_BASE = ''; // relative to current origin
+const API_BASE = '';
 let socket = null;
 let currentUser = null;
-let currentChatUser = null;   // for chat window
-let activeChatId = null;      // for loading messages
+let currentChatUser = null;
+let activeChatId = null;
 let cropper = null;
-let currentPostId = null;     // for comments modal
+let currentPostId = null;
 
-// DOM elements (will be populated after auth)
-let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems;
+// DOM Elements (cached after login)
+let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, headerLogout;
 
-// Helper functions
+// ==================== Helper Functions ====================
 function showLoading() { loadingEl?.classList.remove('hidden'); }
 function hideLoading() { loadingEl?.classList.add('hidden'); }
 
@@ -30,25 +30,20 @@ async function apiRequest(endpoint, options = {}) {
   return data;
 }
 
-// Debounce utility
 function debounce(fn, delay) {
   let timer;
-  return (...args) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), delay);
-  };
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
 }
 
-// ==================== Authentication & Initialization ====================
+// ==================== Initialization ====================
 document.addEventListener('DOMContentLoaded', async () => {
-  // Cache DOM elements
   loadingEl = document.getElementById('loading');
   authContainer = document.getElementById('auth-container');
   mainContainer = document.getElementById('main-container');
   contentArea = document.getElementById('content-area');
   bottomNavItems = document.querySelectorAll('.nav-item');
+  headerLogout = document.getElementById('logout-btn');
 
-  // Check token
   if (getToken()) {
     try {
       showLoading();
@@ -66,7 +61,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     showAuth();
   }
 
-  // Auth UI event listeners
+  // Auth UI
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -78,10 +73,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Register with image crop
+  // Register DP crop
   const regDp = document.getElementById('reg-dp');
-  const dpPreviewContainer = document.getElementById('dp-preview-container');
   const dpPreview = document.getElementById('dp-preview');
+  const dpPreviewContainer = document.getElementById('dp-preview-container');
   const cropBtn = document.getElementById('crop-btn');
   regDp.addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -110,13 +105,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Register form
+  // Register submit
   document.getElementById('register-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('reg-name').value;
     const username = document.getElementById('reg-username').value;
     const password = document.getElementById('reg-password').value;
-    let profilePic = window.regDpBase64 || '';
+    const profilePic = window.regDpBase64 || '';
     try {
       showLoading();
       const data = await apiRequest('/api/auth/register', {
@@ -138,7 +133,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Login form
+  // Login submit
   document.getElementById('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const identifier = document.getElementById('login-identifier').value;
@@ -169,12 +164,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Logout
-  document.getElementById('logout-btn').addEventListener('click', () => {
+  headerLogout?.addEventListener('click', () => {
     setToken(null);
     window.location.reload();
   });
 
-  // Modal close buttons
+  // Close modals
   document.querySelectorAll('.close-modal').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.modal').forEach(m => m.classList.remove('active'));
@@ -188,28 +183,27 @@ function showAuth() {
 }
 
 function initApp() {
-  // Connect Socket.io
+  // Connect socket
   socket = io({ auth: { token: getToken() } });
   socket.on('connect', () => console.log('Socket connected'));
   socket.on('private message', handleIncomingMessage);
   socket.on('system notification', (data) => {
-    alert(`🔊 System: ${data.message}`);
+    alert(`🔊 ${data.from}: ${data.message}`);
   });
 
-  // Setup bottom navigation
+  // Bottom navigation
   bottomNavItems.forEach(item => {
     item.addEventListener('click', () => {
       bottomNavItems.forEach(i => i.classList.remove('active'));
       item.classList.add('active');
-      const view = item.dataset.view;
-      loadView(view);
+      loadView(item.dataset.view);
     });
   });
 
-  // Load default view (Feed)
+  // Load feed by default
   loadView('feed');
 
-  // If user is bot, add bot button to header (for broadcast)
+  // If bot, add broadcast button
   if (currentUser?.isBot) {
     const header = document.querySelector('.app-header');
     const botBtn = document.createElement('button');
@@ -218,7 +212,6 @@ function initApp() {
     botBtn.onclick = () => document.getElementById('bot-modal').classList.add('active');
     header.appendChild(botBtn);
 
-    // Broadcast send
     document.getElementById('send-broadcast').addEventListener('click', async () => {
       const msg = document.getElementById('broadcast-message').value;
       if (!msg) return;
@@ -237,32 +230,26 @@ function initApp() {
   }
 }
 
-// View router
-async function loadView(view) {
-  contentArea.innerHTML = ''; // clear
+// ==================== View Router ====================
+async function loadView(view, param) {
+  contentArea.innerHTML = '';
   if (view === 'feed') await renderFeed();
   else if (view === 'search') renderSearch();
   else if (view === 'create') renderCreate();
   else if (view === 'chats') await renderChats();
-  else if (view === 'profile') await renderProfile(currentUser._id);
+  else if (view === 'profile') await renderProfile(param || currentUser._id);
 }
 
 // ==================== Feed ====================
 async function renderFeed() {
-  const feedHtml = `
-    <div class="view active" id="feed-view">
-      <div id="feed-posts"></div>
-    </div>
-  `;
-  contentArea.innerHTML = feedHtml;
+  contentArea.innerHTML = `<div id="feed-posts" class="view active"></div>`;
   await loadFeedPosts();
 }
 
 async function loadFeedPosts() {
   try {
     const posts = await apiRequest('/api/posts/feed?page=1');
-    const container = document.getElementById('feed-posts');
-    container.innerHTML = posts.map(post => renderPost(post)).join('');
+    document.getElementById('feed-posts').innerHTML = posts.map(post => renderPost(post)).join('');
     attachPostListeners();
   } catch (err) {
     console.error(err);
@@ -270,20 +257,20 @@ async function loadFeedPosts() {
 }
 
 function renderPost(post) {
-  const isLiked = post.likes.includes(currentUser._id);
+  const liked = post.likes.includes(currentUser._id);
   return `
     <div class="post-card" data-post-id="${post._id}">
       <div class="post-header">
-        <img src="${post.user.profilePic || 'https://via.placeholder.com/40'}" class="post-avatar" onclick="viewProfile('${post.user._id}')">
+        <img src="${post.user.profilePic || 'https://via.placeholder.com/40'}" class="post-avatar" onclick="openProfile('${post.user._id}')">
         <div>
-          <div class="post-user" onclick="viewProfile('${post.user._id}')">${post.user.name} @${post.user.username}</div>
+          <div class="post-user" onclick="openProfile('${post.user._id}')">${post.user.name} @${post.user.username}</div>
           <div class="post-time">${new Date(post.createdAt).toLocaleString()}</div>
         </div>
       </div>
       <div class="post-content">${post.content || ''}</div>
       ${post.media.map(m => m.type === 'image' ? `<img src="${m.url}" class="post-media">` : '').join('')}
       <div class="post-actions">
-        <button class="like-btn ${isLiked ? 'liked' : ''}" data-post-id="${post._id}">
+        <button class="like-btn ${liked ? 'liked' : ''}" data-post-id="${post._id}">
           <i class="fas fa-heart"></i> <span class="like-count">${post.likes.length}</span>
         </button>
         <button class="comment-btn" data-post-id="${post._id}">
@@ -301,8 +288,7 @@ function attachPostListeners() {
       const postId = btn.dataset.postId;
       try {
         const data = await apiRequest(`/api/posts/${postId}/like`, { method: 'PUT' });
-        const countSpan = btn.querySelector('.like-count');
-        countSpan.textContent = data.likes.length;
+        btn.querySelector('.like-count').textContent = data.likes.length;
         btn.classList.toggle('liked');
       } catch (err) { console.error(err); }
     });
@@ -316,17 +302,12 @@ function attachPostListeners() {
   });
 }
 
-// ==================== Comments Modal ====================
 async function loadCommentsModal(postId) {
   try {
-    const post = await apiRequest(`/api/posts/${postId}`); // we need a GET /api/posts/:postId endpoint
-    // For now, we can fetch comments from feed data or create a new endpoint.
-    // We'll create a new endpoint later; but for demo, we'll reuse.
-    // We'll just show comments from the post object.
-    const comments = post.comments || [];
+    const post = await apiRequest(`/api/posts/${postId}`);
     const modal = document.getElementById('comments-modal');
     const list = document.getElementById('comments-list');
-    list.innerHTML = comments.map(c => `
+    list.innerHTML = post.comments.map(c => `
       <div class="comment-item">
         <img src="${c.user.profilePic || 'https://via.placeholder.com/30'}" class="comment-avatar">
         <div>
@@ -346,8 +327,8 @@ async function loadCommentsModal(postId) {
         body: JSON.stringify({ text })
       });
       document.getElementById('comment-input').value = '';
-      loadCommentsModal(postId); // refresh
-      // Also refresh feed comment count
+      loadCommentsModal(postId);
+      // Update comment count in feed
       const countSpan = document.querySelector(`.comment-btn[data-post-id="${postId}"] .comment-count`);
       if (countSpan) countSpan.textContent = parseInt(countSpan.textContent) + 1;
     };
@@ -359,9 +340,7 @@ async function loadCommentsModal(postId) {
         loadCommentsModal(postId);
       });
     });
-  } catch (err) {
-    console.error(err);
-  }
+  } catch (err) { console.error(err); }
 }
 
 // ==================== Search ====================
@@ -392,21 +371,29 @@ async function handleSearch() {
           <p>@${u.username} · ${u.ssn}</p>
         </div>
         <button class="follow-btn btn-secondary" data-user-id="${u._id}">${u.isFollowing ? 'Unfollow' : 'Follow'}</button>
+        <button class="chat-btn btn-primary" data-user-id="${u._id}"><i class="fas fa-comment"></i></button>
       </div>
     `).join('');
-    // Attach follow/unfollow and click to profile
+
+    // Click on user item (except buttons) opens profile
     document.querySelectorAll('.user-item').forEach(item => {
       item.addEventListener('click', (e) => {
-        if (!e.target.classList.contains('follow-btn')) {
-          viewProfile(item.dataset.userId);
-        }
+        if (!e.target.closest('button')) openProfile(item.dataset.userId);
       });
     });
+
     document.querySelectorAll('.follow-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const userId = btn.dataset.userId;
         await toggleFollow(userId, btn);
+      });
+    });
+
+    document.querySelectorAll('.chat-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openChat(btn.dataset.userId);
       });
     });
   } catch (err) { console.error(err); }
@@ -427,31 +414,30 @@ function renderCreate() {
       </div>
     </div>
   `;
+
   document.getElementById('attach-media').addEventListener('click', () => {
     document.getElementById('post-media').click();
   });
+
   document.getElementById('post-media').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = () => {
-        const preview = document.getElementById('media-preview');
-        preview.innerHTML = `<img src="${reader.result}" style="max-width:100px; border-radius:10px;">`;
+        document.getElementById('media-preview').innerHTML = `<img src="${reader.result}" style="max-width:100px; border-radius:10px;">`;
         window.postMediaBase64 = reader.result;
       };
       reader.readAsDataURL(file);
     }
   });
+
   document.getElementById('submit-post').addEventListener('click', async () => {
     const content = document.getElementById('post-content').value;
     const mediaBase64 = window.postMediaBase64;
     if (!content && !mediaBase64) return;
     const media = mediaBase64 ? [{ url: mediaBase64, type: 'image' }] : [];
     try {
-      await apiRequest('/api/posts', {
-        method: 'POST',
-        body: JSON.stringify({ content, media })
-      });
+      await apiRequest('/api/posts', { method: 'POST', body: JSON.stringify({ content, media }) });
       document.getElementById('post-content').value = '';
       document.getElementById('media-preview').innerHTML = '';
       delete window.postMediaBase64;
@@ -467,9 +453,6 @@ async function renderProfile(userId) {
   try {
     const user = await apiRequest(`/api/users/${userId}`);
     const posts = await apiRequest(`/api/posts/user/${userId}`);
-    const followersCount = user.followersCount || 0; // we'll need to add these fields
-    const followingCount = user.followingCount || 0;
-    const isFollowing = user.isFollowing || false;
 
     const profileHtml = `
       <div class="view active" id="profile-view">
@@ -481,15 +464,15 @@ async function renderProfile(userId) {
             <p>SSN: ${user.ssn}</p>
             <div class="profile-stats">
               <div class="stat" id="followers-stat">
-                <div class="stat-number">${followersCount}</div>
+                <div class="stat-number">${user.followersCount || 0}</div>
                 <div class="stat-label">Followers</div>
               </div>
               <div class="stat" id="following-stat">
-                <div class="stat-number">${followingCount}</div>
+                <div class="stat-number">${user.followingCount || 0}</div>
                 <div class="stat-label">Following</div>
               </div>
             </div>
-            ${!isOwn ? `<button class="follow-btn btn-primary" data-user-id="${userId}">${isFollowing ? 'Unfollow' : 'Follow'}</button>` : ''}
+            ${!isOwn ? `<button class="follow-btn btn-primary" data-user-id="${userId}">${user.isFollowing ? 'Unfollow' : 'Follow'}</button>` : ''}
           </div>
         </div>
         <div id="profile-posts" class="profile-posts">
@@ -500,7 +483,6 @@ async function renderProfile(userId) {
     contentArea.innerHTML = profileHtml;
     attachPostListeners();
 
-    // Follow button
     if (!isOwn) {
       document.querySelector('.follow-btn').addEventListener('click', async (e) => {
         const btn = e.currentTarget;
@@ -508,7 +490,6 @@ async function renderProfile(userId) {
       });
     }
 
-    // Followers/Following click to show modal
     document.getElementById('followers-stat').addEventListener('click', () => showFollowList(userId, 'followers'));
     document.getElementById('following-stat').addEventListener('click', () => showFollowList(userId, 'following'));
 
@@ -525,8 +506,12 @@ async function toggleFollow(userId, btn) {
       await apiRequest(`/api/follow/${userId}`, { method: 'POST' });
       btn.textContent = 'Unfollow';
     }
-    // Update counts in profile if visible
-    // ...
+    // Update follower count on profile if visible
+    const stat = document.querySelector('.stat-number');
+    if (stat) {
+      const count = parseInt(stat.textContent);
+      stat.textContent = isFollowing ? count - 1 : count + 1;
+    }
   } catch (err) { alert(err.message); }
 }
 
@@ -549,17 +534,12 @@ async function showFollowList(userId, type) {
 
     document.querySelectorAll(`#${type}-list .view-profile`).forEach(btn => {
       btn.addEventListener('click', (e) => {
-        const uid = e.currentTarget.closest('.user-item').dataset.userId;
+        const uid = e.target.closest('.user-item').dataset.userId;
         modal.classList.remove('active');
-        viewProfile(uid);
+        openProfile(uid);
       });
     });
   } catch (err) { console.error(err); }
-}
-
-function viewProfile(userId) {
-  loadView('profile');
-  renderProfile(userId);
 }
 
 // ==================== Chats ====================
@@ -582,7 +562,7 @@ async function renderChats() {
 
 async function loadChatsList() {
   try {
-    const chats = await apiRequest('/api/chats'); // we'll need to create this endpoint
+    const chats = await apiRequest('/api/chats');
     const list = document.getElementById('chats-list');
     list.innerHTML = chats.map(c => `
       <div class="chat-item" data-chat-id="${c._id}" data-user-id="${c.otherUser._id}">
@@ -605,9 +585,27 @@ async function openChat(otherUserId, chatId) {
   activeChatId = chatId;
   document.getElementById('chats-list').classList.add('hidden');
   document.getElementById('chat-window').classList.remove('hidden');
-  // Load messages
-  const msgs = await apiRequest(`/api/chats/${chatId}/messages`);
-  renderMessages(msgs);
+
+  if (!chatId) {
+    // Need to get or create chat via API – we'll implement simple: if no chatId, fetch one
+    const chats = await apiRequest('/api/chats');
+    const found = chats.find(c => c.otherUser._id === otherUserId);
+    if (found) {
+      activeChatId = found._id;
+    } else {
+      // No chat yet; we'll create one on first message
+      activeChatId = null;
+    }
+  }
+
+  // Load messages if chatId exists
+  if (activeChatId) {
+    const msgs = await apiRequest(`/api/chats/${activeChatId}/messages`);
+    renderMessages(msgs);
+  } else {
+    document.getElementById('chat-messages').innerHTML = '';
+  }
+
   document.getElementById('send-chat').onclick = sendChatMessage;
   document.getElementById('chat-input').onkeypress = (e) => {
     if (e.key === 'Enter') sendChatMessage();
@@ -620,7 +618,7 @@ function renderMessages(messages) {
     <div class="message ${m.sender === currentUser._id ? 'own' : ''}">
       ${m.content}
       <span class="message-time">${new Date(m.createdAt).toLocaleTimeString()}</span>
-      ${m.sender === currentUser._id ? `<span class="message-status">${m.readBy?.includes(currentUser._id) ? '✓✓' : '✓'}</span>` : ''}
+      ${m.sender === currentUser._id ? `<span class="message-status">${m.readBy?.length > 1 ? '✓✓' : '✓'}</span>` : ''}
     </div>
   `).join('');
   container.scrollTop = container.scrollHeight;
@@ -629,24 +627,24 @@ function renderMessages(messages) {
 async function sendChatMessage() {
   const text = document.getElementById('chat-input').value.trim();
   if (!text || !currentChatUser) return;
-  // Emit via socket
-  socket.emit('private message', { to: currentChatUser, content: text, media: [] });
-  // Also save via HTTP (we need a POST /api/messages endpoint)
-  await apiRequest('/api/messages', {
-    method: 'POST',
-    body: JSON.stringify({ to: currentChatUser, content: text })
-  });
-  document.getElementById('chat-input').value = '';
-  // Optimistically add message
-  const container = document.getElementById('chat-messages');
-  container.innerHTML += `
-    <div class="message own">
-      ${text}
-      <span class="message-time">${new Date().toLocaleTimeString()}</span>
-      <span class="message-status">✓</span>
-    </div>
-  `;
-  container.scrollTop = container.scrollHeight;
+  // Send via HTTP to save, socket will also emit but we rely on socket for real-time
+  try {
+    const msg = await apiRequest('/api/messages', {
+      method: 'POST',
+      body: JSON.stringify({ to: currentChatUser, content: text })
+    });
+    // Optimistically add to UI
+    const container = document.getElementById('chat-messages');
+    container.innerHTML += `
+      <div class="message own">
+        ${text}
+        <span class="message-time">${new Date().toLocaleTimeString()}</span>
+        <span class="message-status">✓</span>
+      </div>
+    `;
+    container.scrollTop = container.scrollHeight;
+    document.getElementById('chat-input').value = '';
+  } catch (err) { alert(err.message); }
 }
 
 function handleIncomingMessage(data) {
@@ -655,15 +653,28 @@ function handleIncomingMessage(data) {
     container.innerHTML += `
       <div class="message">
         ${data.content}
-        <span class="message-time">${new Date(data.timestamp).toLocaleTimeString()}</span>
+        <span class="message-time">${new Date(data.createdAt).toLocaleTimeString()}</span>
       </div>
     `;
     container.scrollTop = container.scrollHeight;
   } else {
-    // Update chat list last message
+    // Update chat list last message (simplified: just reload chats if in chats view)
+    if (document.getElementById('chats-view')?.classList.contains('active')) {
+      loadChatsList();
+    }
   }
 }
 
-// ==================== Settings ====================
-// Settings view will be part of profile? We'll add a settings button in profile.
-// For simplicity, we can add a settings tab later.
+// ==================== Navigation Helpers ====================
+function openProfile(userId) {
+  loadView('profile', userId);
+}
+
+function openChat(userId) {
+  loadView('chats');
+  // Wait for chats to load then open specific chat
+  setTimeout(() => openChat(userId, null), 500);
+}
+
+// Make functions global for onclick attributes
+window.openProfile = openProfile;
