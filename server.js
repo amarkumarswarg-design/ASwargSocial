@@ -15,16 +15,13 @@ const Follow = require('./models/Follow');
 const Chat = require('./models/Chat');
 const Message = require('./models/Message');
 
-// Initialize Express
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: '*' } }); // Adjust CORS as needed
+const io = socketIo(server, { cors: { origin: '*' } });
 
 // Middleware
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
-
-// Serve static files from "public"
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Cloudinary config
@@ -34,7 +31,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// MongoDB connection with timeout
+// MongoDB
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
@@ -48,16 +45,13 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const BOT_SECRET = process.env.BOT_SECRET;
 
 // ========== Helper Functions ==========
-
 async function generateSSN() {
   const counter = await Counter.findOneAndUpdate(
     { name: 'ssn' },
     { $inc: { seq: 1 } },
     { new: true, upsert: true }
   );
-  const num = counter.seq;
-  const padded = num.toString().padStart(4, '0');
-  return `+1(212)908-${padded}`;
+  return `+1(212)908-${counter.seq.toString().padStart(4, '0')}`;
 }
 
 function generateToken(user) {
@@ -71,14 +65,13 @@ function generateToken(user) {
 const authMiddleware = async (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'No token provided' });
-
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const user = await User.findById(decoded.id).select('-password');
     if (!user) throw new Error();
     req.user = user;
     next();
-  } catch (err) {
+  } catch {
     res.status(401).json({ error: 'Invalid token' });
   }
 };
@@ -87,23 +80,21 @@ const authMiddleware = async (req, res, next) => {
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
   if (!token) return next(new Error('Authentication error'));
-
   jwt.verify(token, JWT_SECRET, (err, decoded) => {
     if (err) return next(new Error('Authentication error'));
     socket.userId = decoded.id;
-    socket.user = decoded;
     next();
   });
 });
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.userId);
+  console.log('Socket connected:', socket.userId);
   socket.join(socket.userId);
 
   socket.on('private message', async (data) => {
-    const { to, content, media } = data;
     try {
-      // Save message to DB
+      const { to, content } = data;
+      // Find or create chat
       let chat = await Chat.findOne({
         participants: { $all: [socket.userId, to] }
       });
@@ -111,11 +102,12 @@ io.on('connection', (socket) => {
         chat = new Chat({ participants: [socket.userId, to] });
         await chat.save();
       }
+      // Save message
       const message = new Message({
         chat: chat._id,
         sender: socket.userId,
         content,
-        media
+        readBy: [socket.userId] // sender has read it
       });
       await message.save();
       chat.lastMessage = message._id;
@@ -124,11 +116,10 @@ io.on('connection', (socket) => {
 
       // Emit to recipient
       io.to(to).emit('private message', {
+        _id: message._id,
         from: socket.userId,
         content,
-        media,
-        timestamp: message.createdAt,
-        messageId: message._id
+        createdAt: message.createdAt
       });
     } catch (err) {
       console.error('Socket message error:', err);
@@ -136,7 +127,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.userId);
+    console.log('Socket disconnected:', socket.userId);
   });
 });
 
@@ -146,25 +137,22 @@ io.on('connection', (socket) => {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, username, password, profilePic } = req.body;
-
-    const existing = await User.findOne({ username: username.toLowerCase() });
-    if (existing) return res.status(400).json({ error: 'Username already taken' });
+    if (await User.findOne({ username: username.toLowerCase() })) {
+      return res.status(400).json({ error: 'Username already taken' });
+    }
 
     const ssn = await generateSSN();
+    let profilePicUrl = '', profilePicPublicId = '';
 
-    let profilePicUrl = '';
-    let profilePicPublicId = '';
-
-    if (profilePic && profilePic.startsWith('data:image')) {
+    if (profilePic?.startsWith('data:image')) {
       try {
-        const uploadResult = await cloudinary.uploader.upload(profilePic, {
+        const upload = await cloudinary.uploader.upload(profilePic, {
           folder: 'swarg_social/profiles',
           transformation: { width: 500, height: 500, crop: 'limit' }
         });
-        profilePicUrl = uploadResult.secure_url;
-        profilePicPublicId = uploadResult.public_id;
-      } catch (uploadErr) {
-        console.error('Cloudinary upload error:', uploadErr);
+        profilePicUrl = upload.secure_url;
+        profilePicPublicId = upload.public_id;
+      } catch {
         return res.status(500).json({ error: 'Failed to upload profile picture' });
       }
     }
@@ -177,14 +165,12 @@ app.post('/api/auth/register', async (req, res) => {
       profilePic: profilePicUrl,
       profilePicPublicId
     });
-
     await user.save();
 
-    const token = generateToken(user);
-    res.status(201).json({ user: { ...user.toObject(), password: undefined }, token });
+    res.status(201).json({ user: { ...user.toObject(), password: undefined }, token: generateToken(user) });
   } catch (err) {
-    console.error('Registration error:', err);
-    res.status(500).json({ error: 'Server error during registration' });
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -194,43 +180,27 @@ app.post('/api/auth/login', async (req, res) => {
     const user = await User.findOne({
       $or: [{ username: identifier.toLowerCase() }, { ssn: identifier }]
     });
-    if (!user) return res.status(400).json({ error: 'Invalid credentials' });
-
-    const isMatch = await user.comparePassword(password);
-    if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
-
-    const token = generateToken(user);
-    res.json({ user: { ...user.toObject(), password: undefined }, token });
+    if (!user || !(await user.comparePassword(password))) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+    res.json({ user: { ...user.toObject(), password: undefined }, token: generateToken(user) });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-app.get('/api/auth/me', authMiddleware, (req, res) => {
-  res.json(req.user);
-});
+app.get('/api/auth/me', authMiddleware, (req, res) => res.json(req.user));
 
 // ---- Users ----
 app.get('/api/users/search', authMiddleware, async (req, res) => {
   try {
     const { q } = req.query;
     if (!q) return res.json([]);
-    const users = await User.find({
-      username: { $regex: q, $options: 'i' }
-    }).select('name username profilePic ssn').limit(20);
-    // Attach follow status
-    const userIds = users.map(u => u._id);
-    const follows = await Follow.find({
-      follower: req.user._id,
-      following: { $in: userIds }
-    });
-    const followingSet = new Set(follows.map(f => f.following.toString()));
-    const result = users.map(u => ({
-      ...u.toObject(),
-      isFollowing: followingSet.has(u._id.toString())
-    }));
-    res.json(result);
+    const users = await User.find({ username: { $regex: q, $options: 'i' } })
+      .select('name username profilePic ssn').limit(20);
+    const following = await Follow.find({ follower: req.user._id }).distinct('following');
+    const followingSet = new Set(following.map(id => id.toString()));
+    res.json(users.map(u => ({ ...u.toObject(), isFollowing: followingSet.has(u._id.toString()) })));
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -238,23 +208,17 @@ app.get('/api/users/search', authMiddleware, async (req, res) => {
 
 app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
   try {
-    const { identifier } = req.params;
     const user = await User.findOne({
-      $or: [{ username: identifier.toLowerCase() }, { ssn: identifier }]
+      $or: [{ username: req.params.identifier.toLowerCase() }, { ssn: req.params.identifier }]
     }).select('-password');
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Add follow counts and status
-    const followersCount = await Follow.countDocuments({ following: user._id });
-    const followingCount = await Follow.countDocuments({ follower: user._id });
-    const isFollowing = !!(await Follow.findOne({ follower: req.user._id, following: user._id }));
-
-    res.json({
-      ...user.toObject(),
-      followersCount,
-      followingCount,
-      isFollowing
-    });
+    const [followersCount, followingCount, isFollowing] = await Promise.all([
+      Follow.countDocuments({ following: user._id }),
+      Follow.countDocuments({ follower: user._id }),
+      Follow.exists({ follower: req.user._id, following: user._id })
+    ]);
+    res.json({ ...user.toObject(), followersCount, followingCount, isFollowing: !!isFollowing });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -262,36 +226,22 @@ app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
 
 app.put('/api/users/me', authMiddleware, async (req, res) => {
   try {
-    const updates = req.body;
     const user = req.user;
-
-    if (updates.username && updates.username !== user.username) {
-      const existing = await User.findOne({ username: updates.username.toLowerCase() });
-      if (existing) return res.status(400).json({ error: 'Username already taken' });
-      user.username = updates.username.toLowerCase();
-    }
-
-    if (updates.name) user.name = updates.name;
-
-    if (updates.profilePic && updates.profilePic.startsWith('data:image')) {
-      try {
-        if (user.profilePicPublicId) {
-          await cloudinary.uploader.destroy(user.profilePicPublicId);
-        }
-        const uploadResult = await cloudinary.uploader.upload(updates.profilePic, {
-          folder: 'swarg_social/profiles',
-          transformation: { width: 500, height: 500, crop: 'limit' }
-        });
-        user.profilePic = uploadResult.secure_url;
-        user.profilePicPublicId = uploadResult.public_id;
-      } catch (uploadErr) {
-        console.error('Cloudinary upload error:', uploadErr);
-        return res.status(500).json({ error: 'Failed to upload profile picture' });
+    const { name, username, password, profilePic } = req.body;
+    if (username && username !== user.username) {
+      if (await User.findOne({ username: username.toLowerCase() })) {
+        return res.status(400).json({ error: 'Username taken' });
       }
+      user.username = username.toLowerCase();
     }
+    if (name) user.name = name;
+    if (password) user.password = password;
 
-    if (updates.password) {
-      user.password = updates.password;
+    if (profilePic?.startsWith('data:image')) {
+      if (user.profilePicPublicId) await cloudinary.uploader.destroy(user.profilePicPublicId);
+      const upload = await cloudinary.uploader.upload(profilePic, { folder: 'swarg_social/profiles' });
+      user.profilePic = upload.secure_url;
+      user.profilePicPublicId = upload.public_id;
     }
 
     user.updatedAt = Date.now();
@@ -305,48 +255,35 @@ app.put('/api/users/me', authMiddleware, async (req, res) => {
 app.delete('/api/users/me', authMiddleware, async (req, res) => {
   try {
     const { password } = req.body;
-    const user = req.user;
-
-    const isMatch = await user.comparePassword(password);
-    if (!isMatch) return res.status(400).json({ error: 'Invalid password' });
-
-    if (user.profilePicPublicId) {
-      await cloudinary.uploader.destroy(user.profilePicPublicId);
+    if (!(await req.user.comparePassword(password))) {
+      return res.status(400).json({ error: 'Invalid password' });
     }
-
-    const posts = await Post.find({ user: user._id });
+    // Cleanup Cloudinary
+    if (req.user.profilePicPublicId) await cloudinary.uploader.destroy(req.user.profilePicPublicId);
+    const posts = await Post.find({ user: req.user._id });
     for (const post of posts) {
-      if (post.media && post.media.length > 0) {
-        for (const media of post.media) {
-          if (media.publicId) {
-            await cloudinary.uploader.destroy(media.publicId);
-          }
-        }
-      }
+      for (const m of post.media) if (m.publicId) await cloudinary.uploader.destroy(m.publicId);
     }
-    await Post.deleteMany({ user: user._id });
-    await Follow.deleteMany({ $or: [{ follower: user._id }, { following: user._id }] });
-    await Message.deleteMany({ sender: user._id });
-    await Chat.deleteMany({ participants: user._id });
-    await User.findByIdAndDelete(user._id);
-    res.json({ message: 'Account deleted permanently' });
+    await Post.deleteMany({ user: req.user._id });
+    await Follow.deleteMany({ $or: [{ follower: req.user._id }, { following: req.user._id }] });
+    await Message.deleteMany({ sender: req.user._id });
+    await Chat.deleteMany({ participants: req.user._id });
+    await User.findByIdAndDelete(req.user._id);
+    res.json({ message: 'Account deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// ---- Follow System ----
+// ---- Follow ----
 app.post('/api/follow/:userId', authMiddleware, async (req, res) => {
   try {
-    const targetUser = await User.findById(req.params.userId);
-    if (!targetUser) return res.status(404).json({ error: 'User not found' });
-    if (targetUser._id.equals(req.user._id)) return res.status(400).json({ error: 'Cannot follow yourself' });
-
-    const existing = await Follow.findOne({ follower: req.user._id, following: targetUser._id });
-    if (existing) return res.status(400).json({ error: 'Already following' });
-
-    const follow = new Follow({ follower: req.user._id, following: targetUser._id });
-    await follow.save();
+    if (req.params.userId === req.user._id.toString()) {
+      return res.status(400).json({ error: 'Cannot follow yourself' });
+    }
+    const exists = await Follow.findOne({ follower: req.user._id, following: req.params.userId });
+    if (exists) return res.status(400).json({ error: 'Already following' });
+    await Follow.create({ follower: req.user._id, following: req.params.userId });
     res.json({ message: 'Followed' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -384,48 +321,33 @@ app.get('/api/users/:userId/following', authMiddleware, async (req, res) => {
 app.post('/api/posts', authMiddleware, async (req, res) => {
   try {
     const { content, media } = req.body;
-
-    // Upload any base64 images in media to Cloudinary
     const processedMedia = [];
-    if (media && media.length > 0) {
+    if (media && media.length) {
       for (const item of media) {
-        if (item.url && item.url.startsWith('data:image')) {
-          const uploadResult = await cloudinary.uploader.upload(item.url, {
-            folder: 'swarg_social/posts'
-          });
-          processedMedia.push({
-            url: uploadResult.secure_url,
-            publicId: uploadResult.public_id,
-            type: 'image'
-          });
+        if (item.url?.startsWith('data:image')) {
+          const upload = await cloudinary.uploader.upload(item.url, { folder: 'swarg_social/posts' });
+          processedMedia.push({ url: upload.secure_url, publicId: upload.public_id, type: 'image' });
         } else {
           processedMedia.push(item);
         }
       }
     }
-
-    const post = new Post({
-      user: req.user._id,
-      content,
-      media: processedMedia
-    });
+    const post = new Post({ user: req.user._id, content, media: processedMedia });
     await post.save();
     await post.populate('user', 'name username profilePic');
     res.status(201).json(post);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Post upload error:', err);
+    res.status(500).json({ error: 'Failed to create post' });
   }
 });
 
 app.get('/api/posts/feed', authMiddleware, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = 10;
     const posts = await Post.find()
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
+      .skip((page - 1) * 10).limit(10)
       .populate('user', 'name username profilePic')
       .populate('comments.user', 'name username profilePic');
     res.json(posts);
@@ -451,7 +373,7 @@ app.get('/api/posts/:postId', authMiddleware, async (req, res) => {
     const post = await Post.findById(req.params.postId)
       .populate('user', 'name username profilePic')
       .populate('comments.user', 'name username profilePic');
-    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (!post) return res.status(404).json({ error: 'Not found' });
     res.json(post);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -461,14 +383,10 @@ app.get('/api/posts/:postId', authMiddleware, async (req, res) => {
 app.put('/api/posts/:postId/like', authMiddleware, async (req, res) => {
   try {
     const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-
+    if (!post) return res.status(404).json({ error: 'Not found' });
     const index = post.likes.indexOf(req.user._id);
-    if (index === -1) {
-      post.likes.push(req.user._id);
-    } else {
-      post.likes.splice(index, 1);
-    }
+    if (index === -1) post.likes.push(req.user._id);
+    else post.likes.splice(index, 1);
     await post.save();
     res.json({ likes: post.likes });
   } catch (err) {
@@ -478,14 +396,12 @@ app.put('/api/posts/:postId/like', authMiddleware, async (req, res) => {
 
 app.post('/api/posts/:postId/comment', authMiddleware, async (req, res) => {
   try {
-    const { text } = req.body;
     const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-
-    post.comments.push({ user: req.user._id, text });
+    if (!post) return res.status(404).json({ error: 'Not found' });
+    post.comments.push({ user: req.user._id, text: req.body.text });
     await post.save();
     await post.populate('comments.user', 'name username profilePic');
-    res.status(201).json(post.comments);
+    res.json(post.comments);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -494,41 +410,31 @@ app.post('/api/posts/:postId/comment', authMiddleware, async (req, res) => {
 app.delete('/api/posts/:postId/comment/:commentId', authMiddleware, async (req, res) => {
   try {
     const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-
+    if (!post) return res.status(404).json({ error: 'Not found' });
     const comment = post.comments.id(req.params.commentId);
     if (!comment) return res.status(404).json({ error: 'Comment not found' });
-
     if (comment.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({ error: 'Not authorized' });
     }
-
     comment.remove();
     await post.save();
-    res.json({ message: 'Comment deleted' });
+    res.json({ message: 'Deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// ---- Chat & Messages ----
+// ---- Chat ----
 app.get('/api/chats', authMiddleware, async (req, res) => {
   try {
     const chats = await Chat.find({ participants: req.user._id })
       .populate('participants', 'name username profilePic')
       .populate('lastMessage')
       .sort({ updatedAt: -1 });
-
-    const enriched = chats.map(chat => {
-      const other = chat.participants.find(p => !p._id.equals(req.user._id));
-      return {
-        _id: chat._id,
-        otherUser: other,
-        lastMessage: chat.lastMessage,
-        updatedAt: chat.updatedAt
-      };
-    });
-    res.json(enriched);
+    res.json(chats.map(c => {
+      const other = c.participants.find(p => !p._id.equals(req.user._id));
+      return { _id: c._id, otherUser: other, lastMessage: c.lastMessage, updatedAt: c.updatedAt };
+    }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -547,95 +453,53 @@ app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
 
 app.post('/api/messages', authMiddleware, async (req, res) => {
   try {
-    const { to, content, media } = req.body;
-    const recipient = await User.findById(to);
-    if (!recipient) return res.status(404).json({ error: 'User not found' });
-
-    let chat = await Chat.findOne({
-      participants: { $all: [req.user._id, recipient._id] }
-    });
-    if (!chat) {
-      chat = new Chat({ participants: [req.user._id, recipient._id] });
-      await chat.save();
-    }
-
-    const message = new Message({
-      chat: chat._id,
-      sender: req.user._id,
-      content,
-      media
-    });
+    const { to, content } = req.body;
+    let chat = await Chat.findOne({ participants: { $all: [req.user._id, to] } });
+    if (!chat) chat = new Chat({ participants: [req.user._id, to] });
+    const message = new Message({ chat: chat._id, sender: req.user._id, content, readBy: [req.user._id] });
     await message.save();
-
     chat.lastMessage = message._id;
     chat.updatedAt = Date.now();
     await chat.save();
-
-    await message.populate('sender', 'name username profilePic');
     io.to(to).emit('private message', {
+      _id: message._id,
       from: req.user._id,
       content,
-      media,
-      timestamp: message.createdAt,
-      messageId: message._id
+      createdAt: message.createdAt
     });
-
     res.json(message);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ---- Master Bot ----
+// ---- Bot ----
 app.post('/api/bot/login', async (req, res) => {
-  try {
-    const { password } = req.body;
-    if (password !== BOT_SECRET) {
-      return res.status(401).json({ error: 'Invalid bot credentials' });
-    }
-
-    let bot = await User.findOne({ isBot: true });
-    if (!bot) {
-      bot = new User({
-        name: 'Swarg Social Bot',
-        username: 'swargbot',
-        password: Math.random().toString(36),
-        ssn: '+1(212)908-0000',
-        isBot: true
-      });
-      await bot.save();
-    }
-
-    const token = generateToken(bot);
-    res.json({ token, user: { ...bot.toObject(), password: undefined } });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
+  if (req.body.password !== BOT_SECRET) return res.status(401).json({ error: 'Invalid bot credentials' });
+  let bot = await User.findOne({ isBot: true });
+  if (!bot) {
+    bot = new User({
+      name: 'Swarg Social Bot',
+      username: 'swargbot',
+      password: Math.random().toString(36),
+      ssn: '+1(212)908-0000',
+      isBot: true
+    });
+    await bot.save();
   }
+  res.json({ token: generateToken(bot), user: { ...bot.toObject(), password: undefined } });
 });
 
 app.post('/api/bot/broadcast', authMiddleware, async (req, res) => {
-  try {
-    if (!req.user.isBot) {
-      return res.status(403).json({ error: 'Only bot can broadcast' });
-    }
-
-    const { message } = req.body;
-    if (!message) return res.status(400).json({ error: 'Message required' });
-
-    io.emit('system notification', { message, from: 'Swarg Social Bot' });
-    res.json({ success: true, message: 'Broadcast sent' });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
+  if (!req.user.isBot) return res.status(403).json({ error: 'Only bot can broadcast' });
+  io.emit('system notification', { message: req.body.message, from: 'Swarg Social Bot' });
+  res.json({ success: true });
 });
 
-// ========== Catch‑all for SPA ==========
+// Catch‑all for SPA
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ========== Start Server ==========
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
