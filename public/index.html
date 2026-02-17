@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>Swarg Social</title>
+  <link rel="manifest" href="/manifest.json">
+  <!-- Google Fonts & Icons -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+  <!-- Cropper.js for image cropping -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
+  <!-- Custom styles -->
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Loading indicator -->
+    <div id="loading" class="loading hidden">Loading...</div>
+
+    <!-- Auth Container (shown when not logged in) -->
+    <div id="auth-container" class="auth-container">
+      <div class="auth-card glass">
+        <h1 class="logo">Swarg Social</h1>
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="login">Login</button>
+          <button class="tab-btn" data-tab="register">Register</button>
+        </div>
+
+        <!-- Login Form -->
+        <form id="login-form" class="auth-form active">
+          <div class="input-group">
+            <i class="fas fa-user"></i>
+            <input type="text" id="login-identifier" placeholder="Username or SSN" required>
+          </div>
+          <div class="input-group">
+            <i class="fas fa-lock"></i>
+            <input type="password" id="login-password" placeholder="Password" required>
+          </div>
+          <button type="submit" class="btn-primary">Login</button>
+          <p class="form-message" id="login-message"></p>
+        </form>
+
+        <!-- Register Form -->
+        <form id="register-form" class="auth-form">
+          <div class="input-group">
+            <i class="fas fa-user"></i>
+            <input type="text" id="reg-name" placeholder="Full Name" required>
+          </div>
+          <div class="input-group">
+            <i class="fas fa-at"></i>
+            <input type="text" id="reg-username" placeholder="Username" required>
+          </div>
+          <div class="input-group">
+            <i class="fas fa-lock"></i>
+            <input type="password" id="reg-password" placeholder="Password" required>
+          </div>
+          <div class="file-input-group">
+            <label for="reg-dp"><i class="fas fa-camera"></i> Profile Picture (max 100MB)</label>
+            <input type="file" id="reg-dp" accept="image/*">
+            <div id="dp-preview-container" class="preview-container hidden">
+              <img id="dp-preview" src="#" alt="Preview">
+              <button type="button" id="crop-btn" class="btn-small">Crop</button>
+            </div>
+          </div>
+          <button type="submit" class="btn-primary">Register</button>
+          <p class="form-message" id="register-message"></p>
+        </form>
+
+        <!-- SSN display after registration -->
+        <div id="ssn-display" class="ssn-card hidden">
+          <p>Your Swarg Social Number (SSN):</p>
+          <h2 id="ssn-value"></h2>
+          <button id="copy-ssn" class="btn-secondary"><i class="fas fa-copy"></i> Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main App Container (shown when logged in) -->
+    <div id="main-container" class="main-container hidden">
+      <!-- Top Navigation -->
+      <nav class="navbar glass">
+        <div class="nav-left">
+          <h2 class="logo-small">Swarg</h2>
+        </div>
+        <div class="nav-center">
+          <button class="nav-item active" data-view="feed"><i class="fas fa-globe"></i><span>Feed</span></button>
+          <button class="nav-item" data-view="search"><i class="fas fa-search"></i><span>Search</span></button>
+          <button class="nav-item" data-view="chats"><i class="fas fa-comment"></i><span>Chats</span></button>
+          <button class="nav-item" data-view="profile"><i class="fas fa-user"></i><span>Profile</span></button>
+          <button class="nav-item" data-view="settings"><i class="fas fa-cog"></i><span>Settings</span></button>
+        </div>
+        <div class="nav-right">
+          <button id="logout-btn" class="btn-icon"><i class="fas fa-sign-out-alt"></i></button>
+        </div>
+      </nav>
+
+      <!-- Dynamic Content Views -->
+      <div id="content-area" class="content-area">
+        <!-- Feed View -->
+        <div id="feed-view" class="view active">
+          <div class="create-post glass">
+            <textarea id="post-content" placeholder="What's on your mind?" rows="2"></textarea>
+            <div class="post-actions">
+              <button id="post-media-btn"><i class="fas fa-image"></i></button>
+              <button id="submit-post" class="btn-primary">Post</button>
+            </div>
+            <input type="file" id="post-media-input" accept="image/*,video/*,audio/*" multiple hidden>
+          </div>
+          <div id="feed-posts" class="posts-container">
+            <!-- Posts will be injected here -->
+          </div>
+        </div>
+
+        <!-- Search View -->
+        <div id="search-view" class="view">
+          <div class="search-box glass">
+            <i class="fas fa-search"></i>
+            <input type="text" id="search-input" placeholder="Search by username...">
+          </div>
+          <div id="search-results" class="search-results"></div>
+        </div>
+
+        <!-- Chats View (simplified) -->
+        <div id="chats-view" class="view">
+          <div class="chats-list" id="chats-list">
+            <!-- List of chats -->
+          </div>
+          <div class="chat-area" id="chat-area">
+            <div class="chat-header" id="chat-header"></div>
+            <div class="chat-messages" id="chat-messages"></div>
+            <div class="chat-input-area">
+              <input type="text" id="chat-input" placeholder="Type a message...">
+              <button id="send-chat-btn"><i class="fas fa-paper-plane"></i></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Profile View -->
+        <div id="profile-view" class="view">
+          <div class="profile-header glass">
+            <img id="profile-pic" src="" alt="Profile">
+            <div class="profile-info">
+              <h3 id="profile-name"></h3>
+              <p id="profile-username"></p>
+              <p id="profile-ssn"></p>
+              <div class="follow-stats">
+                <span id="followers-count">0</span> followers · <span id="following-count">0</span> following
+              </div>
+              <button id="follow-btn" class="btn-secondary hidden">Follow</button>
+            </div>
+          </div>
+          <div class="profile-posts grid-view" id="profile-posts"></div>
+        </div>
+
+        <!-- Settings View -->
+        <div id="settings-view" class="view">
+          <div class="settings-card glass">
+            <h3>Account Settings</h3>
+            <div class="setting-item">
+              <label>Name</label>
+              <input type="text" id="settings-name" placeholder="Your name">
+            </div>
+            <div class="setting-item">
+              <label>Username</label>
+              <input type="text" id="settings-username" placeholder="Username">
+            </div>
+            <div class="setting-item">
+              <label>New Password</label>
+              <input type="password" id="settings-password" placeholder="Leave blank to keep current">
+            </div>
+            <div class="setting-item">
+              <label>Profile Picture</label>
+              <input type="file" id="settings-dp" accept="image/*">
+              <div id="settings-dp-preview" class="preview-small"></div>
+            </div>
+            <button id="save-settings" class="btn-primary">Save Changes</button>
+            <hr>
+            <div class="danger-zone">
+              <h4>Delete Account</h4>
+              <p>This action is permanent. Enter your password to confirm.</p>
+              <input type="password" id="delete-password" placeholder="Your password">
+              <button id="delete-account-btn" class="btn-danger">Delete My Account</button>
+            </div>
+            <hr>
+            <div class="creator-credit">
+              <p><i class="fas fa-crown"></i> Creator: Amar Kumar</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+  <script src="/script.js"></script>
+</body>
+  </html>
