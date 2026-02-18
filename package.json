@@ -1,14 +1,13 @@
 {
   "name": "swarg-social-backend",
   "version": "3.0.0",
-  "description": "Backend for Swarg Social – premium social platform with Telegram-style messaging, stories, groups",
+  "description": "Backend for Swarg Social – premium social platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
-    "@faker-js/faker": "^8.4.1",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^1.41.0",
     "dotenv": "^16.3.1",
