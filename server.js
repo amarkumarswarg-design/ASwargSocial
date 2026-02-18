@@ -31,6 +31,13 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// Check Cloudinary environment variables
+if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+  console.error('❌ Cloudinary environment variables are missing!');
+} else {
+  console.log('✅ Cloudinary configured');
+}
+
 // MongoDB
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
@@ -154,7 +161,7 @@ app.post('/api/auth/register', async (req, res) => {
         profilePicPublicId = upload.public_id;
       } catch (uploadErr) {
         console.error('Cloudinary upload error:', uploadErr);
-        return res.status(500).json({ error: 'Failed to upload profile picture' });
+        return res.status(500).json({ error: 'Failed to upload profile picture: ' + uploadErr.message });
       }
     }
 
