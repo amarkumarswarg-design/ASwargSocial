@@ -1,161 +1,47 @@
-// ==================== Configuration & State ====================
-let socket = null;
 let currentUser = null;
-let currentChatUser = null;
 
-// DOM Elements
-const loadingEl = document.getElementById('loading');
-const authContainer = document.getElementById('auth-container');
-const mainContainer = document.getElementById('main-container');
-const contentArea = document.getElementById('content-area');
-
-// ==================== Helper: API & Token ====================
-async function apiRequest(endpoint, options = {}) {
-  const token = localStorage.getItem('token');
-  const headers = { 'Content-Type': 'application/json', ...options.headers };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  
-  const res = await fetch(endpoint, { ...options, headers });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
-}
-
-// ==================== Initialization ====================
 async function initApp() {
   const token = localStorage.getItem('token');
-  if (!token) return showAuth();
+  if (!token) return showView('auth');
 
   try {
-    loadingEl.classList.remove('hidden');
-    // Fix: Ensure user data is loaded before anything else
-    currentUser = await apiRequest('/api/auth/me');
-    showMainApp();
+    currentUser = await fetch('/api/auth/me', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    }).then(res => res.json());
     
-    socket = io({ auth: { token } });
-    socket.on('private message', handleIncomingMessage);
-    
+    showView('main');
     loadView('feed');
-  } catch (err) {
-    localStorage.removeItem('token');
-    showAuth();
-  } finally {
-    loadingEl.classList.add('hidden');
-  }
+  } catch { showView('auth'); }
 }
 
-function showMainApp() {
-  authContainer.classList.add('hidden');
-  mainContainer.classList.remove('hidden');
-}
-
-function showAuth() {
-  authContainer.classList.remove('hidden');
-  mainContainer.classList.add('hidden');
-}
-
-// ==================== Navigation Router ====================
-async function loadView(view, param = null) {
-  contentArea.innerHTML = '<div class="spinner"></div>';
+function showView(view) {
+  const auth = document.getElementById('auth-container');
+  const main = document.getElementById('main-container');
   
-  // Highlight active nav item
-  document.querySelectorAll('.nav-item').forEach(i => {
-    i.classList.toggle('active', i.dataset.view === view);
-  });
-
-  if (view === 'feed') await renderFeed();
-  else if (view === 'search') renderSearch();
-  else if (view === 'create') renderCreate();
-  else if (view === 'chats') await renderChats();
-  else if (view === 'profile') await renderProfile(param || currentUser._id);
-}
-
-// ==================== Feed & Posts ====================
-async function renderFeed() {
-  try {
-    const posts = await apiRequest('/api/posts/feed');
-    contentArea.innerHTML = posts.length ? posts.map(p => createPostHTML(p)).join('') : '<p class="empty">No posts yet.</p>';
-  } catch (err) { console.error(err); }
-}
-
-function createPostHTML(post) {
-  const isLiked = post.likes.includes(currentUser._id);
-  return `
-    <div class="post-card glass-card">
-      <div class="post-header" onclick="openProfile('${post.user._id}')">
-        <img src="${post.user.profilePic || 'default-avatar.png'}" class="avatar">
-        <div><strong>${post.user.name}</strong><p>@${post.user.username}</p></div>
-      </div>
-      <div class="post-body">
-        <p>${post.content || ''}</p>
-        ${post.media.map(m => `<img src="${m.url}" class="post-img">`).join('')}
-      </div>
-      <div class="post-footer">
-        <button onclick="likePost('${post._id}', this)" class="${isLiked ? 'liked' : ''}">
-          <i class="fa-heart ${isLiked ? 'fas' : 'far'}"></i> ${post.likes.length}
-        </button>
-        <button onclick="openComments('${post._id}')"><i class="far fa-comment"></i> ${post.comments.length}</button>
-      </div>
-    </div>
-  `;
-}
-
-// ==================== Messaging (Fixed Loop & Logic) ====================
-async function navigateToChat(userId) {
-  await loadView('chats');
-  // Small delay to ensure DOM is ready
-  setTimeout(() => openChatWindow(userId), 100);
-}
-
-async function openChatWindow(userId) {
-  currentChatUser = userId;
-  document.getElementById('chats-list').classList.add('hidden');
-  document.getElementById('chat-window').classList.remove('hidden');
-  
-  // Fetch chat history from server
-  const container = document.getElementById('chat-messages');
-  container.innerHTML = '<p class="loading-text">Loading history...</p>';
-  // Logic to fetch and render messages goes here...
-}
-
-function sendMessage() {
-  const input = document.getElementById('chat-input');
-  const text = input.value.trim();
-  if (!text || !currentChatUser) return;
-
-  // Single source: Socket only
-  socket.emit('private message', { to: currentChatUser, content: text });
-  
-  appendMessage({ from: currentUser._id, content: text, createdAt: new Date() });
-  input.value = '';
-}
-
-function handleIncomingMessage(data) {
-  if (currentChatUser === data.from) {
-    appendMessage(data);
+  if (view === 'auth') {
+    auth.classList.remove('hidden');
+    main.classList.add('hidden');
   } else {
-    // Simple notification for background messages
-    console.log("New message from:", data.from);
+    auth.classList.add('hidden');
+    main.classList.remove('hidden');
   }
 }
 
-function appendMessage(data) {
-  const container = document.getElementById('chat-messages');
-  const div = document.createElement('div');
-  div.className = `message ${data.from === currentUser._id ? 'own' : 'other'}`;
-  div.innerHTML = `<p>${data.content}</p><span>${new Date(data.createdAt).toLocaleTimeString()}</span>`;
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
+async function loadView(view) {
+  const area = document.getElementById('content-area');
+  area.innerHTML = '<h2>Loading...</h2>';
+  
+  // Logic to render Feed, Profile, Search, etc.
+  if(view === 'feed') area.innerHTML = '<div class="glass-card">Home Feed Coming Soon</div>';
+  if(view === 'profile') area.innerHTML = `<div class="glass-card">User: ${currentUser.name}</div>`;
 }
-
-// ==================== Event Listeners ====================
-document.addEventListener('DOMContentLoaded', initApp);
 
 document.querySelectorAll('.nav-item').forEach(item => {
-  item.addEventListener('click', () => loadView(item.dataset.view));
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+    loadView(item.dataset.view);
+  });
 });
 
-// Global functions for HTML
-window.openProfile = (id) => loadView('profile', id);
-window.navigateToChat = navigateToChat;
-          
+document.addEventListener('DOMContentLoaded', initApp);
