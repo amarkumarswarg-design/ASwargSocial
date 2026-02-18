@@ -176,10 +176,113 @@
         </div>
       </div>
     </div>
+
+    <!-- Edit Profile Modal (new) -->
+    <div id="edit-profile-modal" class="modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>Edit Profile</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <div class="setting-item">
+            <label>Name</label>
+            <input type="text" id="edit-name" placeholder="Name">
+          </div>
+          <div class="setting-item">
+            <label>Username</label>
+            <input type="text" id="edit-username" placeholder="Username">
+          </div>
+          <div class="setting-item">
+            <label>Bio</label>
+            <textarea id="edit-bio" placeholder="Tell something about yourself" rows="2"></textarea>
+          </div>
+          <div class="setting-item">
+            <label>Work</label>
+            <input type="text" id="edit-work" placeholder="Where do you work?">
+          </div>
+          <div class="setting-item">
+            <label>Education</label>
+            <input type="text" id="edit-education" placeholder="Where did you study?">
+          </div>
+          <div class="setting-item">
+            <label>Location</label>
+            <input type="text" id="edit-location" placeholder="Where do you live?">
+          </div>
+          <div class="setting-item">
+            <label>Relationship</label>
+            <select id="edit-relationship">
+              <option value="">Select</option>
+              <option value="Single">Single</option>
+              <option value="In a relationship">In a relationship</option>
+              <option value="Engaged">Engaged</option>
+              <option value="Married">Married</option>
+              <option value="It's complicated">It's complicated</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <label>Profile Picture</label>
+            <input type="file" id="edit-dp" accept="image/*">
+            <div id="edit-dp-preview" class="preview-small"></div>
+          </div>
+          <hr>
+          <div class="danger-zone">
+            <h4>Change Password</h4>
+            <input type="password" id="edit-password" placeholder="New password (leave blank to keep current)">
+          </div>
+          <hr>
+          <div class="danger-zone">
+            <h4>Delete Account</h4>
+            <p>This action is permanent. Enter your password to confirm.</p>
+            <input type="password" id="delete-password" placeholder="Your password">
+            <button id="delete-account-btn" class="btn-danger">Delete My Account</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="save-profile" class="btn-primary">Save Changes</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Group Settings Modal (new) -->
+    <div id="group-settings-modal" class="modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>Group Settings</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <div id="group-details"></div>
+          <div id="group-members-list"></div>
+          <button id="generate-invite" class="btn-secondary">Generate Invite Link</button>
+          <div id="invite-link-container" class="hidden">
+            <p>Invite link:</p>
+            <input type="text" id="invite-link" readonly>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Custom Popup Modal -->
+    <div id="popup-modal" class="modal">
+      <div class="modal-content glass-card popup-content">
+        <div class="popup-header">
+          <h3 id="popup-title">Notification</h3>
+          <button class="close-popup"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="popup-body">
+          <p id="popup-message"></p>
+        </div>
+        <div class="popup-footer">
+          <button id="popup-confirm" class="btn-primary">OK</button>
+          <button id="popup-cancel" class="btn-secondary hidden">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
   <script src="/app.js"></script>
 </body>
-  </html>
+              </html>
