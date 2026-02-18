@@ -1,117 +1,27 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Swarg Social</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
-
-    <div id="loading" class="loading-overlay hidden">
-        <div class="spinner"></div>
+    <div id="auth-container" class="hidden">
+        <h1>Welcome to Swarg</h1>
+        <button onclick="localStorage.setItem('token', 'test'); location.reload();">Fake Login for Test</button>
     </div>
 
-    <div id="auth-container" class="auth-screen">
-        <div class="auth-card glass-card">
-            <h1 class="logo-text">Swarg</h1>
-            <div class="auth-tabs">
-                <button class="tab-btn active" data-tab="login">Login</button>
-                <button class="tab-btn" data-tab="register">Register</button>
-            </div>
-
-            <form id="login-form" class="auth-form active">
-                <input type="text" id="login-identifier" placeholder="Username or SSN" required>
-                <input type="password" id="login-password" placeholder="Password" required>
-                <p id="login-message" class="msg"></p>
-                <button type="submit" class="btn-primary">Enter Swarg</button>
-            </form>
-
-            <form id="register-form" class="auth-form">
-                <input type="text" id="reg-name" placeholder="Full Name" required>
-                <input type="text" id="reg-username" placeholder="Choose Username" required>
-                <input type="password" id="reg-password" placeholder="Create Password" required>
-                
-                <div class="dp-upload">
-                    <label for="reg-dp" class="upload-label">
-                        <i class="fas fa-camera"></i> Set Profile Picture
-                    </label>
-                    <input type="file" id="reg-dp" accept="image/*" hidden>
-                </div>
-                
-                <div id="dp-preview-container" class="hidden">
-                    <img id="dp-preview">
-                    <button type="button" id="crop-btn" class="btn-secondary">Crop Photo</button>
-                </div>
-
-                <p id="register-message" class="msg"></p>
-                <div id="ssn-display" class="hidden">
-                    <p>Your Unique SSN: <strong id="ssn-value"></strong></p>
-                    <button type="button" id="copy-ssn" class="btn-icon"><i class="fas fa-copy"></i> Copy</button>
-                </div>
-                <button type="submit" class="btn-primary">Create Account</button>
-            </form>
-        </div>
-    </div>
-
-    <div id="main-container" class="app-screen hidden">
-        <header class="app-header glass-card">
-            <span class="header-logo">Swarg</span>
-            <button id="logout-btn" class="btn-icon"><i class="fas fa-sign-out-alt"></i></button>
-        </header>
-
-        <main id="content-area" class="app-content"></main>
-
-        <nav class="bottom-nav glass-card">
-            <div class="nav-item active" data-view="feed"><i class="fas fa-home"></i><span>Home</span></div>
-            <div class="nav-item" data-view="search"><i class="fas fa-search"></i><span>Search</span></div>
-            <div class="nav-item" data-view="create"><i class="fas fa-plus-square"></i><span>Post</span></div>
-            <div class="nav-item" data-view="chats"><i class="fas fa-comment-dots"></i><span>Chats</span></div>
-            <div class="nav-item" data-view="profile"><i class="fas fa-user"></i><span>Profile</span></div>
+    <div id="main-container" class="hidden">
+        <header class="glass-card">Swarg</header>
+        <main id="content-area"></main>
+        <nav class="bottom-nav">
+            <div class="nav-item" data-view="feed"><i class="fa fa-home"></i></div>
+            <div class="nav-item" data-view="search"><i class="fa fa-search"></i></div>
+            <div class="nav-item" data-view="profile"><i class="fa fa-user"></i></div>
         </nav>
     </div>
-
-    <div id="comments-modal" class="modal">
-        <div class="modal-content glass-card">
-            <div class="modal-header">
-                <h3>Comments</h3>
-                <button class="close-modal"><i class="fas fa-times"></i></button>
-            </div>
-            <div id="comments-list" class="modal-body"></div>
-            <div class="modal-footer">
-                <input type="text" id="comment-input" placeholder="Add a comment...">
-                <button id="submit-comment"><i class="fas fa-paper-plane"></i></button>
-            </div>
-        </div>
-    </div>
-
-    <div id="followers-modal" class="modal">
-        <div class="modal-content glass-card">
-            <div class="modal-header">
-                <h3>Followers</h3>
-                <button class="close-modal"><i class="fas fa-times"></i></button>
-            </div>
-            <div id="followers-list" class="modal-body"></div>
-        </div>
-    </div>
-    
-    <div id="bot-modal" class="modal">
-        <div class="modal-content glass-card">
-            <div class="modal-header">
-                <h3>Global Broadcast</h3>
-                <button class="close-modal"><i class="fas fa-times"></i></button>
-            </div>
-            <textarea id="broadcast-message" placeholder="Type message for everyone..."></textarea>
-            <button id="send-broadcast" class="btn-primary">Blast Notification</button>
-        </div>
-    </div>
-
     <script src="/socket.io/socket.io.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
     <script src="app.js"></script>
 </body>
-  </html>
-  
+</html>
