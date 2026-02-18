@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Swarg Social</title>
   <link rel="manifest" href="/manifest.json">
-  <!-- Fonts & Icons -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
-  <!-- Cropper.js -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -19,7 +17,7 @@
       <div class="spinner"></div>
     </div>
 
-    <!-- Auth Container (visible when not logged in) -->
+    <!-- Auth Container -->
     <div id="auth-container" class="auth-container">
       <div class="auth-card glass-card">
         <h1 class="logo">Swarg Social</h1>
@@ -28,7 +26,6 @@
           <button class="tab-btn" data-tab="register">Register</button>
         </div>
 
-        <!-- Login Form -->
         <form id="login-form" class="auth-form active">
           <div class="input-field">
             <i class="fas fa-user"></i>
@@ -42,7 +39,6 @@
           <p id="login-message" class="form-message"></p>
         </form>
 
-        <!-- Register Form -->
         <form id="register-form" class="auth-form">
           <div class="input-field">
             <i class="fas fa-user"></i>
@@ -68,7 +64,6 @@
           <p id="register-message" class="form-message"></p>
         </form>
 
-        <!-- SSN display after registration -->
         <div id="ssn-display" class="ssn-card hidden">
           <p>Your Swarg Social Number (SSN):</p>
           <h2 id="ssn-value"></h2>
@@ -77,18 +72,15 @@
       </div>
     </div>
 
-    <!-- Main App Container (visible when logged in) -->
+    <!-- Main App Container -->
     <div id="main-container" class="main-container hidden">
-      <!-- Header -->
       <header class="app-header glass-card">
         <h2 class="logo-small">Swarg</h2>
         <button id="logout-btn" class="btn-icon"><i class="fas fa-sign-out-alt"></i></button>
       </header>
 
-      <!-- Dynamic Content Area -->
       <div id="content-area" class="content-area"></div>
 
-      <!-- Bottom Navigation -->
       <nav class="bottom-nav glass-card">
         <button class="nav-item active" data-view="feed"><i class="fas fa-home"></i><span>Feed</span></button>
         <button class="nav-item" data-view="search"><i class="fas fa-search"></i><span>Search</span></button>
@@ -145,11 +137,49 @@
         </div>
       </div>
     </div>
+
+    <div id="story-viewer-modal" class="modal">
+      <div class="modal-content glass-card story-viewer">
+        <div class="modal-header">
+          <h3 id="story-username"></h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body" id="story-image-container"></div>
+      </div>
+    </div>
+
+    <div id="add-contact-modal" class="modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>Add Contact</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <input type="text" id="contact-ssn" placeholder="Enter SSN (+1...)" class="modal-input">
+          <input type="text" id="contact-nickname" placeholder="Nickname (optional)" class="modal-input">
+          <button id="save-contact" class="btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="create-group-modal" class="modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>Create Group</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <input type="text" id="group-name" placeholder="Group name" class="modal-input">
+          <p>Select members (from contacts):</p>
+          <div id="contact-select-list"></div>
+          <button id="create-group-btn" class="btn-primary">Create</button>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <!-- Scripts -->
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
   <script src="/app.js"></script>
 </body>
-                                                                                                 </html>
+          </html>
