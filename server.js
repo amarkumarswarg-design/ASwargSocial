@@ -579,4 +579,420 @@ app.post('/api/groups/:groupId/members', authMiddleware, async (req, res) => {
   }
 });
 
-app.delete('/api/groups/:groupId/members/:userId', 
+app.delete('/api/groups/:groupId/members/:userId',authMiddleware, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (!group.admins.includes(req.user._id) && req.user._id.toString() !== req.params.userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    group.members = group.members.filter(id => id.toString() !== req.params.userId);
+    group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
+    await group.save();
+
+    // Notify removed user via bot (if bot exists)
+    const bot = await User.findOne({ isBot: true });
+    if (bot) {
+      const message = new Message({
+        chat: null,
+        group: null,
+        sender: bot._id,
+        content: `You were removed from group "${group.name}"${reason ? ` because: ${reason}` : ''}.`,
+        readBy: [bot._id]
+      });
+      await message.save();
+      io.to(req.params.userId).emit('private message', {
+        _id: message._id,
+        from: bot._id,
+        fromName: bot.name,
+        fromAvatar: bot.profilePic,
+        content: message.content,
+        media: [],
+        createdAt: message.createdAt
+      });
+    }
+
+    res.json(group);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/groups/:groupId/admins', authMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (group.owner.toString() !== req.user._id.toString()) return res.status(403).json({ error: 'Only owner can promote to admin' });
+    if (!group.members.includes(userId)) return res.status(400).json({ error: 'User not in group' });
+    if (!group.admins.includes(userId)) {
+      group.admins.push(userId);
+      await group.save();
+    }
+    res.json(group);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/groups/:groupId/admins/:userId', authMiddleware, async (req, res) => {
+  try {
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (group.owner.toString() !== req.user._id.toString()) return res.status(403).json({ error: 'Only owner can demote admin' });
+    group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
+    await group.save();
+    res.json(group);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/groups/:groupId/invite', authMiddleware, async (req, res) => {
+  try {
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (!group.admins.includes(req.user._id)) return res.status(403).json({ error: 'Not authorized' });
+
+    const code = crypto.randomBytes(8).toString('hex');
+    const invite = new Invite({
+      groupId: group._id,
+      code,
+      expiresAt: new Date(Date.now() + 7*24*60*60*1000)
+    });
+    await invite.save();
+    res.json({ inviteLink: `${req.protocol}://${req.get('host')}/join/${code}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/join/:code', async (req, res) => {
+  try {
+    const invite = await Invite.findOne({ code: req.params.code, expiresAt: { $gt: new Date() } });
+    if (!invite) return res.status(404).send('Invite expired or invalid');
+    // Redirect to frontend with group id
+    res.redirect(`/?joinGroup=${invite.groupId}`);
+  } catch (err) {
+    res.status(500).send('Server error');
+  }
+});
+
+app.delete('/api/groups/:groupId', authMiddleware, async (req, res) => {
+  try {
+    const group = await Group.findOne({ _id: req.params.groupId, owner: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found or not owner' });
+    await Group.findByIdAndDelete(group._id);
+    res.json({ message: 'Group deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Stories ----
+app.post('/api/stories', authMiddleware, async (req, res) => {
+  try {
+    const { media } = req.body;
+    if (!media?.startsWith('data:image')) return res.status(400).json({ error: 'Invalid image' });
+    const upload = await cloudinary.uploader.upload(media, { folder: 'swarg_social/stories' });
+    const story = new Story({
+      user: req.user._id,
+      media: { url: upload.secure_url, publicId: upload.public_id, type: 'image' },
+      expiresAt: new Date(Date.now() + 24*60*60*1000)
+    });
+    await story.save();
+    res.json(story);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/stories/feed', authMiddleware, async (req, res) => {
+  try {
+    const following = await Follow.find({ follower: req.user._id }).distinct('following');
+    following.push(req.user._id);
+    const stories = await Story.find({
+      user: { $in: following },
+      expiresAt: { $gt: new Date() }
+    }).populate('user', 'name username profilePic verified ownerBadge').sort({ createdAt: -1 });
+    res.json(stories);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/stories/:storyId/like', authMiddleware, async (req, res) => {
+  try {
+    const story = await Story.findById(req.params.storyId);
+    if (!story) return res.status(404).json({ error: 'Story not found' });
+    const index = story.viewers.indexOf(req.user._id);
+    if (index === -1) {
+      story.viewers.push(req.user._id);
+    } else {
+      story.viewers.splice(index, 1);
+    }
+    await story.save();
+    res.json({ viewers: story.viewers });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/stories/:storyId', authMiddleware, async (req, res) => {
+  try {
+    const story = await Story.findById(req.params.storyId);
+    if (!story) return res.status(404).json({ error: 'Story not found' });
+    if (story.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    if (story.media.publicId) await cloudinary.uploader.destroy(story.media.publicId);
+    await story.deleteOne();
+    res.json({ message: 'Story deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Posts ----
+app.post('/api/posts', authMiddleware, async (req, res) => {
+  try {
+    const { content, media } = req.body;
+    const processedMedia = [];
+    if (media?.length) {
+      for (const item of media) {
+        if (item.url?.startsWith('data:image')) {
+          try {
+            const upload = await cloudinary.uploader.upload(item.url, {
+              folder: 'swarg_social/posts',
+              timeout: 60000
+            });
+            processedMedia.push({ url: upload.secure_url, publicId: upload.public_id, type: 'image' });
+          } catch (uploadErr) {
+            console.error('Cloudinary upload error:', uploadErr);
+            return res.status(500).json({ error: 'Image upload failed: ' + uploadErr.message });
+          }
+        } else {
+          processedMedia.push(item);
+        }
+      }
+    }
+    const post = new Post({ user: req.user._id, content, media: processedMedia });
+    await post.save();
+    await post.populate('user', 'name username profilePic verified ownerBadge');
+    res.status(201).json(post);
+  } catch (err) {
+    console.error('Post creation error:', err);
+    res.status(500).json({ error: 'Failed to create post' });
+  }
+});
+
+app.get('/api/posts/feed', authMiddleware, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const posts = await Post.find()
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * 10).limit(10)
+      .populate('user', 'name username profilePic verified ownerBadge')
+      .populate('comments.user', 'name username profilePic verified ownerBadge');
+    res.json(posts);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/posts/user/:userId', authMiddleware, async (req, res) => {
+  try {
+    const posts = await Post.find({ user: req.params.userId })
+      .sort({ createdAt: -1 })
+      .populate('user', 'name username profilePic verified ownerBadge')
+      .populate('comments.user', 'name username profilePic verified ownerBadge');
+    res.json(posts);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/posts/:postId', authMiddleware, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.postId)
+      .populate('user', 'name username profilePic verified ownerBadge')
+      .populate('comments.user', 'name username profilePic verified ownerBadge');
+    if (!post) return res.status(404).json({ error: 'Not found' });
+    res.json(post);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/posts/:postId/like', authMiddleware, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.postId);
+    if (!post) return res.status(404).json({ error: 'Not found' });
+    const index = post.likes.indexOf(req.user._id);
+    if (index === -1) post.likes.push(req.user._id);
+    else post.likes.splice(index, 1);
+    await post.save();
+    res.json({ likes: post.likes });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/posts/:postId/comment', authMiddleware, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.postId);
+    if (!post) return res.status(404).json({ error: 'Not found' });
+    post.comments.push({ user: req.user._id, text: req.body.text });
+    await post.save();
+    await post.populate('comments.user', 'name username profilePic verified ownerBadge');
+    res.json(post.comments);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/posts/:postId/comment/:commentId', authMiddleware, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.postId);
+    if (!post) return res.status(404).json({ error: 'Not found' });
+    const comment = post.comments.id(req.params.commentId);
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    if (comment.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    comment.remove();
+    await post.save();
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/posts/:postId', authMiddleware, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.postId);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    for (const m of post.media) {
+      if (m.publicId) await cloudinary.uploader.destroy(m.publicId);
+    }
+    await post.deleteOne();
+    res.json({ message: 'Post deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Chat & Messages ----
+app.get('/api/chats', authMiddleware, async (req, res) => {
+  try {
+    const chats = await Chat.find({ participants: req.user._id })
+      .populate('participants', 'name username profilePic verified ownerBadge')
+      .populate('lastMessage')
+      .sort({ updatedAt: -1 });
+    res.json(chats.map(c => {
+      const other = c.participants.find(p => !p._id.equals(req.user._id));
+      return { _id: c._id, otherUser: other, lastMessage: c.lastMessage, updatedAt: c.updatedAt };
+    }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
+  try {
+    const chat = await Chat.findOne({ _id: req.params.chatId, participants: req.user._id });
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+    const messages = await Message.find({ chat: chat._id })
+      .populate('sender', 'name username profilePic verified ownerBadge')
+      .sort({ createdAt: 1 });
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/groups/:groupId/messages', authMiddleware, async (req, res) => {
+  try {
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    const messages = await Message.find({ group: group._id })
+      .populate('sender', 'name username profilePic verified ownerBadge')
+      .sort({ createdAt: 1 });
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/messages/:messageId', authMiddleware, async (req, res) => {
+  try {
+    const message = await Message.findById(req.params.messageId);
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    // Check if user is sender, group admin, or group owner
+    if (message.sender.toString() === req.user._id.toString()) {
+      // sender can delete
+    } else if (message.group) {
+      const group = await Group.findById(message.group);
+      if (!group) return res.status(404).json({ error: 'Group not found' });
+      if (!group.admins.includes(req.user._id) && group.owner.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ error: 'Not authorized' });
+      }
+    } else {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    await message.deleteOne();
+    // Notify group members to remove message from UI
+    if (message.group) {
+      io.to(`group_${message.group}`).emit('message deleted', { messageId: message._id });
+    } else if (message.chat) {
+      const chat = await Chat.findById(message.chat);
+      if (chat) {
+        const other = chat.participants.find(p => p.toString() !== req.user._id.toString());
+        if (other) {
+          io.to(other.toString()).emit('message deleted', { messageId: message._id });
+        }
+      }
+    }
+    res.json({ message: 'Message deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Bot ----
+app.post('/api/bot/login', async (req, res) => {
+  if (req.body.password !== BOT_SECRET) return res.status(401).json({ error: 'Invalid bot credentials' });
+  let bot = await User.findOne({ isBot: true });
+  if (!bot) {
+    bot = new User({
+      name: 'Swarg Social Bot',
+      username: 'swargbot',
+      password: Math.random().toString(36),
+      ssn: '+1(212)908-0000',
+      isBot: true,
+      verified: true,
+      ownerBadge: false
+    });
+    await bot.save();
+  }
+  res.json({ token: generateToken(bot), user: { ...bot.toObject(), password: undefined } });
+});
+
+app.post('/api/bot/broadcast', authMiddleware, async (req, res) => {
+  if (!req.user.isBot) return res.status(403).json({ error: 'Only bot can broadcast' });
+  io.emit('system notification', { message: req.body.message, from: 'Swarg Social Bot' });
+  res.json({ success: true });
+});
+
+// Catch‑all
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
