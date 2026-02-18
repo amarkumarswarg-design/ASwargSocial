@@ -145,6 +145,10 @@
           <button class="close-modal"><i class="fas fa-times"></i></button>
         </div>
         <div class="modal-body" id="story-image-container"></div>
+        <div style="display: flex; gap: 10px; justify-content: center; margin-top: 10px; padding-bottom: 20px;">
+          <button id="like-story" class="btn-icon"><i class="fas fa-heart"></i> <span id="story-likes">0</span></button>
+          <button id="delete-story" class="btn-icon"><i class="fas fa-trash"></i></button>
+        </div>
       </div>
     </div>
 
@@ -177,7 +181,7 @@
       </div>
     </div>
 
-    <!-- Edit Profile Modal (new) -->
+    <!-- Edit Profile Modal -->
     <div id="edit-profile-modal" class="modal">
       <div class="modal-content glass-card">
         <div class="modal-header">
@@ -244,7 +248,7 @@
       </div>
     </div>
 
-    <!-- Group Settings Modal (new) -->
+    <!-- Group Settings Modal -->
     <div id="group-settings-modal" class="modal">
       <div class="modal-content glass-card">
         <div class="modal-header">
@@ -253,11 +257,25 @@
         </div>
         <div class="modal-body">
           <div id="group-details"></div>
+          <div class="setting-item">
+            <label>Group Name</label>
+            <input type="text" id="group-name-edit" placeholder="Group name">
+          </div>
+          <div class="setting-item">
+            <label>Group DP</label>
+            <input type="file" id="group-dp" accept="image/*">
+            <div id="group-dp-preview" class="preview-small"></div>
+          </div>
+          <button id="update-group" class="btn-primary">Update Group</button>
+          <hr>
           <div id="group-members-list"></div>
           <button id="generate-invite" class="btn-secondary">Generate Invite Link</button>
           <div id="invite-link-container" class="hidden">
             <p>Invite link:</p>
-            <input type="text" id="invite-link" readonly>
+            <div style="display: flex; gap: 5px;">
+              <input type="text" id="invite-link" readonly>
+              <button id="copy-invite" class="btn-secondary"><i class="fas fa-copy"></i></button>
+            </div>
           </div>
         </div>
       </div>
