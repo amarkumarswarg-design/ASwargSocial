@@ -234,8 +234,8 @@ function initApp() {
 async function loadView(view, param) {
   contentArea.innerHTML = '';
   if (view === 'feed') await renderFeed();
-  else if (view === 'search') renderSearch();
-  else if (view === 'create') renderCreate();
+  else if (view === 'search') renderSearch(); // search is synchronous
+  else if (view === 'create') renderCreate(); // synchronous
   else if (view === 'chats') await renderChats();
   else if (view === 'profile') await renderProfile(param || currentUser._id);
 }
@@ -391,9 +391,9 @@ async function handleSearch() {
     });
 
     document.querySelectorAll('.chat-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        navigateToChat(btn.dataset.userId);  // FIX: renamed from openChat
+        await navigateToChat(btn.dataset.userId);
       });
     });
   } catch (err) { console.error(err); }
@@ -449,7 +449,7 @@ function renderCreate() {
 
 // ==================== Profile ====================
 async function renderProfile(userId) {
-  // FIX: ensure currentUser is available
+  // Ensure currentUser is available
   if (!currentUser) {
     try {
       currentUser = await apiRequest('/api/auth/me');
@@ -633,13 +633,6 @@ function renderMessages(messages) {
   container.scrollTop = container.scrollHeight;
 }
 
-// FIX: renamed from openChat to avoid collision
-function navigateToChat(userId) {
-  loadView('chats');
-  // Wait for chats to load then open specific chat
-  setTimeout(() => openChat(userId, null), 500);
-}
-
 // ==================== Messaging ====================
 async function sendChatMessage() {
   const text = document.getElementById('chat-input').value.trim();
@@ -680,6 +673,12 @@ function handleIncomingMessage(data) {
 }
 
 // ==================== Navigation Helpers ====================
+async function navigateToChat(userId) {
+  await loadView('chats');
+  // Now the chats view is fully rendered; open the specific chat
+  openChat(userId, null);
+}
+
 function openProfile(userId) {
   loadView('profile', userId);
 }
