@@ -532,4 +532,232 @@ async function renderProfile(userId) {
       // Settings listeners
       document.getElementById('save-settings').addEventListener('click', saveSettings);
       document.getElementById('delete-account-btn').addEventListener('click', deleteAccount);
-      document.getElementById('settings-dp').addEventLis
+      document.getElementById('settings-dp').addEventListener('change', handleSettingsDp);
+    }
+
+    document.getElementById('followers-stat').addEventListener('click', () => showFollowList(userId, 'followers'));
+    document.getElementById('following-stat').addEventListener('click', () => showFollowList(userId, 'following'));
+
+  } catch (err) { console.error(err); }
+}
+
+async function toggleFollow(userId, btn) {
+  const isFollowing = btn.textContent === 'Unfollow';
+  try {
+    if (isFollowing) {
+      await apiRequest(`/api/follow/${userId}`, { method: 'DELETE' });
+      btn.textContent = 'Follow';
+    } else {
+      await apiRequest(`/api/follow/${userId}`, { method: 'POST' });
+      btn.textContent = 'Unfollow';
+    }
+    const stat = document.querySelector('.stat-number');
+    if (stat) {
+      const count = parseInt(stat.textContent);
+      stat.textContent = isFollowing ? count - 1 : count + 1;
+    }
+  } catch (err) { alert(err.message); }
+}
+
+async function showFollowList(userId, type) {
+  try {
+    const users = await apiRequest(`/api/users/${userId}/${type}`);
+    const modal = document.getElementById(`${type}-modal`);
+    const list = document.getElementById(`${type}-list`);
+    list.innerHTML = users.map(u => `
+      <div class="user-item" data-user-id="${u._id}">
+        <img src="${u.profilePic || 'https://via.placeholder.com/40'}">
+        <div class="user-info">
+          <h4>${u.name}</h4>
+          <p>@${u.username}</p>
+        </div>
+        <button class="btn-secondary view-profile">View Profile</button>
+      </div>
+    `).join('');
+    modal.classList.add('active');
+
+    document.querySelectorAll(`#${type}-list .view-profile`).forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const uid = e.target.closest('.user-item').dataset.userId;
+        modal.classList.remove('active');
+        openProfile(uid);
+      });
+    });
+  } catch (err) { console.error(err); }
+}
+
+// Settings helpers
+let settingsDpBase64 = '';
+function handleSettingsDp(e) {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      settingsDpBase64 = reader.result;
+      document.getElementById('settings-dp-preview').innerHTML = `<img src="${reader.result}" width="50" style="border-radius:10px;">`;
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+async function saveSettings() {
+  const updates = {};
+  const name = document.getElementById('settings-name').value;
+  if (name !== currentUser.name) updates.name = name;
+  const username = document.getElementById('settings-username').value;
+  if (username !== currentUser.username) updates.username = username;
+  const password = document.getElementById('settings-password').value;
+  if (password) updates.password = password;
+  if (settingsDpBase64) updates.profilePic = settingsDpBase64;
+
+  try {
+    const data = await apiRequest('/api/users/me', {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    });
+    currentUser = data;
+    alert('Settings updated');
+    loadView('profile', currentUser._id);
+  } catch (err) { alert(err.message); }
+}
+
+async function deleteAccount() {
+  const password = document.getElementById('delete-password').value;
+  if (!password) return alert('Enter your password');
+  if (!confirm('This will permanently delete your account. Are you sure?')) return;
+  try {
+    await apiRequest('/api/users/me', {
+      method: 'DELETE',
+      body: JSON.stringify({ password })
+    });
+    setToken(null);
+    window.location.reload();
+  } catch (err) { alert(err.message); }
+}
+
+// ==================== Chats ====================
+async function renderChats() {
+  contentArea.innerHTML = `
+    <div class="view active" id="chats-view">
+      <div class="chats-list" id="chats-list"></div>
+      <div class="chat-window hidden" id="chat-window">
+        <div class="chat-header" id="chat-header"></div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-area">
+          <input type="text" id="chat-input" placeholder="Type a message...">
+          <button id="send-chat"><i class="fas fa-paper-plane"></i></button>
+        </div>
+      </div>
+    </div>
+  `;
+  await loadChatsList();
+}
+
+async function loadChatsList() {
+  try {
+    const chats = await apiRequest('/api/chats');
+    const list = document.getElementById('chats-list');
+    list.innerHTML = chats.map(c => `
+      <div class="chat-item" data-chat-id="${c._id}" data-user-id="${c.otherUser._id}">
+        <img src="${c.otherUser.profilePic || 'https://via.placeholder.com/50'}">
+        <div class="chat-info">
+          <div class="chat-name">${c.otherUser.name}</div>
+          <div class="chat-last">${c.lastMessage?.content || 'No messages'}</div>
+        </div>
+        <div class="chat-time">${c.lastMessage ? new Date(c.lastMessage.createdAt).toLocaleTimeString() : ''}</div>
+      </div>
+    `).join('');
+    document.querySelectorAll('.chat-item').forEach(item => {
+      item.addEventListener('click', () => openChat(item.dataset.userId, item.dataset.chatId));
+    });
+  } catch (err) { console.error(err); }
+}
+
+async function openChat(otherUserId, chatId) {
+  currentChatUser = otherUserId;
+  activeChatId = chatId;
+  document.getElementById('chats-list').classList.add('hidden');
+  document.getElementById('chat-window').classList.remove('hidden');
+
+  if (!chatId) {
+    const chats = await apiRequest('/api/chats');
+    const found = chats.find(c => c.otherUser._id === otherUserId);
+    if (found) {
+      activeChatId = found._id;
+    } else {
+      activeChatId = null;
+    }
+  }
+
+  if (activeChatId) {
+    const msgs = await apiRequest(`/api/chats/${activeChatId}/messages`);
+    renderMessages(msgs);
+  } else {
+    document.getElementById('chat-messages').innerHTML = '';
+  }
+
+  document.getElementById('send-chat').onclick = sendChatMessage;
+  document.getElementById('chat-input').onkeypress = (e) => {
+    if (e.key === 'Enter') sendChatMessage();
+  };
+}
+
+function renderMessages(messages) {
+  const container = document.getElementById('chat-messages');
+  container.innerHTML = messages.map(m => `
+    <div class="message ${m.sender === currentUser._id ? 'own' : ''}">
+      ${m.content}
+      <span class="message-time">${new Date(m.createdAt).toLocaleTimeString()}</span>
+      ${m.sender === currentUser._id ? `<span class="message-status">${m.readBy?.length > 1 ? '✓✓' : '✓'}</span>` : ''}
+    </div>
+  `).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function sendChatMessage() {
+  const text = document.getElementById('chat-input').value.trim();
+  if (!text || !currentChatUser) return;
+
+  socket.emit('private message', { to: currentChatUser, content: text });
+
+  const container = document.getElementById('chat-messages');
+  container.innerHTML += `
+    <div class="message own">
+      ${text}
+      <span class="message-time">${new Date().toLocaleTimeString()}</span>
+      <span class="message-status">✓</span>
+    </div>
+  `;
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('chat-input').value = '';
+}
+
+function handleIncomingMessage(data) {
+  if (currentChatUser && data.from === currentChatUser) {
+    const container = document.getElementById('chat-messages');
+    container.innerHTML += `
+      <div class="message">
+        ${data.content}
+        <span class="message-time">${new Date(data.createdAt).toLocaleTimeString()}</span>
+      </div>
+    `;
+    container.scrollTop = container.scrollHeight;
+  } else {
+    if (document.getElementById('chats-view')?.classList.contains('active')) {
+      loadChatsList();
+    }
+  }
+}
+
+// ==================== Navigation Helpers ====================
+async function navigateToChat(userId) {
+  await loadView('chats');
+  openChat(userId, null);
+}
+
+function openProfile(userId) {
+  loadView('profile', userId);
+}
+
+// Make functions global for onclick attributes
+window.openProfile = openProfile;
