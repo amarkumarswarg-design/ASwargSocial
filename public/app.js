@@ -1,4 +1,3 @@
-// ==================== Configuration ====================
 const API_BASE = '';
 let socket = null;
 let currentUser = null;
@@ -10,13 +9,10 @@ let cropper = null;
 let currentPostId = null;
 let stories = [];
 
-// DOM Elements
 let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, headerLogout;
 
-// ==================== Helper Functions ====================
 function showLoading() { loadingEl?.classList.remove('hidden'); }
 function hideLoading() { loadingEl?.classList.add('hidden'); }
-
 function getToken() { return localStorage.getItem('token'); }
 function setToken(token) {
   if (token) localStorage.setItem('token', token);
@@ -52,7 +48,6 @@ function formatTime(dateString) {
   return date.toLocaleDateString();
 }
 
-// ==================== Initialization ====================
 document.addEventListener('DOMContentLoaded', async () => {
   loadingEl = document.getElementById('loading');
   authContainer = document.getElementById('auth-container');
@@ -78,7 +73,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     showAuth();
   }
 
-  // Auth tabs
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -90,7 +84,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Register DP crop
   const regDp = document.getElementById('reg-dp');
   const dpPreview = document.getElementById('dp-preview');
   const dpPreviewContainer = document.getElementById('dp-preview-container');
@@ -122,7 +115,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Register submit
   document.getElementById('register-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('reg-name').value;
@@ -150,7 +142,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Login submit
   document.getElementById('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const identifier = document.getElementById('login-identifier').value;
@@ -174,19 +165,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Copy SSN
   document.getElementById('copy-ssn').addEventListener('click', () => {
     navigator.clipboard.writeText(document.getElementById('ssn-value').textContent);
     alert('SSN copied!');
   });
 
-  // Logout
   headerLogout?.addEventListener('click', () => {
     setToken(null);
     window.location.reload();
   });
 
-  // Close modals
   document.querySelectorAll('.close-modal').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.modal').forEach(m => m.classList.remove('active'));
@@ -284,7 +272,6 @@ function initApp() {
   });
 }
 
-// ==================== View Router ====================
 async function loadView(view, param) {
   contentArea.innerHTML = '';
   if (view === 'feed') await renderFeed();
@@ -543,7 +530,6 @@ async function handleSearch() {
     document.querySelectorAll('.add-contact-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        const userId = btn.dataset.userId;
         const userItem = btn.closest('.user-item');
         const ssn = userItem.querySelector('p').textContent.split(' · ')[1];
         document.getElementById('contact-ssn').value = ssn;
@@ -1092,7 +1078,6 @@ function handleIncomingGroupMessage(data) {
   }
 }
 
-// ==================== Navigation Helpers ====================
 async function navigateToChat(userId) {
   await loadView('chats');
   setTimeout(() => openChat(userId, null), 300);
