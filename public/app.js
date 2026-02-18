@@ -10,7 +10,7 @@ let cropper = null;
 let currentPostId = null;
 let stories = [];
 
-// DOM Elements (cached after login)
+// DOM Elements
 let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, headerLogout;
 
 // ==================== Helper Functions ====================
@@ -78,7 +78,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     showAuth();
   }
 
-  // Auth UI tabs
+  // Auth tabs
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -200,7 +200,6 @@ function showAuth() {
 }
 
 function initApp() {
-  // Connect socket
   socket = io({ auth: { token: getToken() } });
   socket.on('connect', () => console.log('Socket connected'));
   socket.on('private message', handleIncomingPrivateMessage);
@@ -209,7 +208,6 @@ function initApp() {
     alert(`🔊 ${data.from}: ${data.message}`);
   });
 
-  // Bottom navigation
   bottomNavItems.forEach(item => {
     item.addEventListener('click', () => {
       bottomNavItems.forEach(i => i.classList.remove('active'));
@@ -218,10 +216,8 @@ function initApp() {
     });
   });
 
-  // Load feed by default
   loadView('feed');
 
-  // If bot, add broadcast button
   if (currentUser?.isBot) {
     const header = document.querySelector('.app-header');
     const botBtn = document.createElement('button');
@@ -247,7 +243,6 @@ function initApp() {
     });
   }
 
-  // Add contact modal
   document.getElementById('save-contact').addEventListener('click', async () => {
     const ssn = document.getElementById('contact-ssn').value.trim();
     const nickname = document.getElementById('contact-nickname').value.trim();
@@ -269,7 +264,6 @@ function initApp() {
     }
   });
 
-  // Create group modal
   document.getElementById('create-group-btn').addEventListener('click', async () => {
     const name = document.getElementById('group-name').value.trim();
     if (!name) return alert('Enter group name');
@@ -287,36 +281,6 @@ function initApp() {
     } catch (err) {
       alert(err.message);
     }
-  });
-
-  // Story upload
-  document.getElementById('add-story-btn')?.addEventListener('click', () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = async (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = async () => {
-          try {
-            showLoading();
-            await apiRequest('/api/stories', {
-              method: 'POST',
-              body: JSON.stringify({ media: reader.result })
-            });
-            alert('Story posted!');
-            loadView('feed');
-          } catch (err) {
-            alert(err.message);
-          } finally {
-            hideLoading();
-          }
-        };
-        reader.readAsDataURL(file);
-      }
-    };
-    input.click();
   });
 }
 
@@ -344,7 +308,7 @@ async function renderFeed() {
 
 async function loadStories() {
   try {
-    const stories = await apiRequest('/api/stories/feed');
+    const storiesData = await apiRequest('/api/stories/feed');
     const container = document.getElementById('story-row');
     container.innerHTML = `
       <div class="story-item add-story" id="add-story-btn">
@@ -353,7 +317,7 @@ async function loadStories() {
         </div>
         <span class="story-name">Add</span>
       </div>
-    ` + stories.map(s => `
+    ` + storiesData.map(s => `
       <div class="story-item" data-story-id="${s._id}">
         <div class="story-avatar">
           <img src="${s.user.profilePic || 'https://via.placeholder.com/60'}" alt="">
@@ -394,7 +358,7 @@ async function loadStories() {
     document.querySelectorAll('.story-item[data-story-id]').forEach(item => {
       item.addEventListener('click', () => {
         const id = item.dataset.storyId;
-        const story = stories.find(s => s._id === id);
+        const story = storiesData.find(s => s._id === id);
         if (story) showStory(story);
       });
     });
@@ -580,7 +544,6 @@ async function handleSearch() {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const userId = btn.dataset.userId;
-        // Get the user's SSN from the displayed text
         const userItem = btn.closest('.user-item');
         const ssn = userItem.querySelector('p').textContent.split(' · ')[1];
         document.getElementById('contact-ssn').value = ssn;
@@ -627,7 +590,6 @@ function renderCreate() {
     const mediaBase64 = window.postMediaBase64;
     if (!content && !mediaBase64) return;
     const media = mediaBase64 ? [{ url: mediaBase64, type: 'image' }] : [];
-    // Show loading on button
     const btn = document.getElementById('submit-post');
     const originalText = btn.textContent;
     btn.textContent = 'Posting...';
@@ -732,7 +694,6 @@ async function renderProfile(userId) {
         await toggleFollow(userId, btn);
       });
     } else {
-      // Settings listeners
       document.getElementById('save-settings').addEventListener('click', saveSettings);
       document.getElementById('delete-account-btn').addEventListener('click', deleteAccount);
       document.getElementById('settings-dp').addEventListener('change', handleSettingsDp);
@@ -789,7 +750,6 @@ async function showFollowList(userId, type) {
   } catch (err) { console.error(err); }
 }
 
-// Settings helpers
 let settingsDpBase64 = '';
 function handleSettingsDp(e) {
   const file = e.target.files[0];
@@ -838,7 +798,7 @@ async function deleteAccount() {
   } catch (err) { alert(err.message); }
 }
 
-// ==================== Chats (Dual Pane) ====================
+// ==================== Chats ====================
 async function renderChats() {
   contentArea.innerHTML = `
     <div class="view active" id="chats-view">
@@ -892,10 +852,10 @@ async function loadChatsList() {
     const chats = await apiRequest('/api/chats');
     const list = document.getElementById('chats-list');
     list.innerHTML = chats.map(c => `
-      <div class="chat-item" data-chat-id="${c._id}" data-user-id="${c.otherUser._id}" data-type="chat">
-        <img src="${c.otherUser.profilePic || 'https://via.placeholder.com/50'}">
+      <div class="chat-item" data-chat-id="${c._id}" data-user-id="${c.otherUser?._id}" data-type="chat">
+        <img src="${c.otherUser?.profilePic || 'https://via.placeholder.com/50'}">
         <div class="chat-info">
-          <div class="chat-name">${c.otherUser.name}</div>
+          <div class="chat-name">${c.otherUser?.name || 'Unknown'}</div>
           <div class="chat-last">${c.lastMessage?.content || 'No messages'}</div>
         </div>
         <div class="chat-time">${c.lastMessage ? formatTime(c.lastMessage.createdAt) : ''}</div>
@@ -956,7 +916,6 @@ function attachChatItemListeners() {
 }
 
 function openCreateGroupModal() {
-  // Load contacts for selection
   apiRequest('/api/contacts').then(contacts => {
     const container = document.getElementById('contact-select-list');
     container.innerHTML = contacts.map(c => `
@@ -970,6 +929,7 @@ function openCreateGroupModal() {
 }
 
 async function openChat(otherUserId, chatId) {
+  if (!otherUserId) return;
   currentChatUser = otherUserId;
   currentGroup = null;
   activeChatId = chatId;
@@ -997,7 +957,7 @@ async function openChat(otherUserId, chatId) {
 
   const otherUser = await apiRequest(`/api/users/${otherUserId}`);
   document.getElementById('chat-header').innerHTML = `
-    <img src="${otherUser.profilePic || 'https://via.placeholder.com/40'}" class="chat-avatar" style="width:40px; height:40px; border-radius:50%;">
+    <img src="${otherUser.profilePic || 'https://via.placeholder.com/40'}" style="width:40px; height:40px; border-radius:50%; margin-right:10px;">
     <strong>${otherUser.name}</strong>
   `;
   document.getElementById('send-chat').onclick = sendPrivateMessage;
@@ -1007,6 +967,7 @@ async function openChat(otherUserId, chatId) {
 }
 
 async function openGroup(groupId) {
+  if (!groupId) return;
   currentGroup = groupId;
   currentChatUser = null;
   activeGroupId = groupId;
@@ -1022,7 +983,7 @@ async function openGroup(groupId) {
 
   const group = await apiRequest(`/api/groups/${groupId}`);
   document.getElementById('chat-header').innerHTML = `
-    <img src="${group.dp || 'https://via.placeholder.com/40'}" class="chat-avatar" style="width:40px; height:40px; border-radius:50%;">
+    <img src="${group.dp || 'https://via.placeholder.com/40'}" style="width:40px; height:40px; border-radius:50%; margin-right:10px;">
     <strong>${group.name}</strong>
   `;
   document.getElementById('send-chat').onclick = sendGroupMessage;
@@ -1056,11 +1017,9 @@ async function sendPrivateMessage() {
 
   socket.emit('private message', { to: currentChatUser, content: text, media });
 
-  // Clear input and reset media
   document.getElementById('chat-input').value = '';
   chatMediaBase64 = null;
 
-  // Optimistically add message (will be replaced by actual from socket, but fine)
   const container = document.getElementById('chat-messages');
   container.innerHTML += `
     <div class="message own">
@@ -1136,7 +1095,6 @@ function handleIncomingGroupMessage(data) {
 // ==================== Navigation Helpers ====================
 async function navigateToChat(userId) {
   await loadView('chats');
-  // Need to ensure chats list is loaded before opening
   setTimeout(() => openChat(userId, null), 300);
 }
 
@@ -1144,5 +1102,4 @@ function openProfile(userId) {
   loadView('profile', userId);
 }
 
-// Make functions global for onclick attributes
 window.openProfile = openProfile;
