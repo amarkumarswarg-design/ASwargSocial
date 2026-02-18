@@ -8,7 +8,6 @@ let activeChatId = null;
 let activeGroupId = null;
 let cropper = null;
 let currentPostId = null;
-let currentStoryIndex = 0;
 let stories = [];
 
 // DOM Elements (cached after login)
@@ -289,6 +288,36 @@ function initApp() {
       alert(err.message);
     }
   });
+
+  // Story upload
+  document.getElementById('add-story-btn')?.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = async () => {
+          try {
+            showLoading();
+            await apiRequest('/api/stories', {
+              method: 'POST',
+              body: JSON.stringify({ media: reader.result })
+            });
+            alert('Story posted!');
+            loadView('feed');
+          } catch (err) {
+            alert(err.message);
+          } finally {
+            hideLoading();
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    };
+    input.click();
+  });
 }
 
 // ==================== View Router ====================
@@ -315,7 +344,7 @@ async function renderFeed() {
 
 async function loadStories() {
   try {
-    stories = await apiRequest('/api/stories/feed');
+    const stories = await apiRequest('/api/stories/feed');
     const container = document.getElementById('story-row');
     container.innerHTML = `
       <div class="story-item add-story" id="add-story-btn">
@@ -334,8 +363,32 @@ async function loadStories() {
     `).join('');
 
     document.getElementById('add-story-btn').addEventListener('click', () => {
-      // Open story upload (simplified: just alert for now)
-      alert('Story upload not implemented in demo');
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = async () => {
+            try {
+              showLoading();
+              await apiRequest('/api/stories', {
+                method: 'POST',
+                body: JSON.stringify({ media: reader.result })
+              });
+              alert('Story posted!');
+              loadView('feed');
+            } catch (err) {
+              alert(err.message);
+            } finally {
+              hideLoading();
+            }
+          };
+          reader.readAsDataURL(file);
+        }
+      };
+      input.click();
     });
 
     document.querySelectorAll('.story-item[data-story-id]').forEach(item => {
@@ -369,6 +422,7 @@ async function loadFeedPosts() {
 
 function renderPost(post) {
   const liked = post.likes.includes(currentUser._id);
+  const isOwn = post.user._id === currentUser._id;
   return `
     <div class="post-card" data-post-id="${post._id}">
       <div class="post-header" onclick="openProfile('${post.user._id}')">
@@ -377,6 +431,7 @@ function renderPost(post) {
           <div class="post-user">${post.user.name} @${post.user.username}</div>
           <div class="post-time">${formatTime(post.createdAt)}</div>
         </div>
+        ${isOwn ? `<button class="delete-post-btn" data-post-id="${post._id}"><i class="fas fa-trash"></i></button>` : ''}
       </div>
       <div class="post-content">${post.content || ''}</div>
       ${post.media.map(m => m.type === 'image' ? `<img src="${m.url}" class="post-media">` : '').join('')}
@@ -409,6 +464,20 @@ function attachPostListeners() {
     btn.addEventListener('click', () => {
       currentPostId = btn.dataset.postId;
       loadCommentsModal(currentPostId);
+    });
+  });
+
+  document.querySelectorAll('.delete-post-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const postId = btn.dataset.postId;
+      if (!confirm('Delete this post?')) return;
+      try {
+        await apiRequest(`/api/posts/${postId}`, { method: 'DELETE' });
+        btn.closest('.post-card').remove();
+      } catch (err) {
+        alert(err.message);
+      }
     });
   });
 }
@@ -511,8 +580,11 @@ async function handleSearch() {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const userId = btn.dataset.userId;
-        // For demo, just alert; could open contact modal prefilled
-        alert('Add contact feature: would need SSN. Use Contacts section.');
+        // Get the user's SSN from the displayed text
+        const userItem = btn.closest('.user-item');
+        const ssn = userItem.querySelector('p').textContent.split(' · ')[1];
+        document.getElementById('contact-ssn').value = ssn;
+        document.getElementById('add-contact-modal').classList.add('active');
       });
     });
   } catch (err) { console.error(err); }
@@ -555,6 +627,11 @@ function renderCreate() {
     const mediaBase64 = window.postMediaBase64;
     if (!content && !mediaBase64) return;
     const media = mediaBase64 ? [{ url: mediaBase64, type: 'image' }] : [];
+    // Show loading on button
+    const btn = document.getElementById('submit-post');
+    const originalText = btn.textContent;
+    btn.textContent = 'Posting...';
+    btn.disabled = true;
     try {
       await apiRequest('/api/posts', { method: 'POST', body: JSON.stringify({ content, media }) });
       document.getElementById('post-content').value = '';
@@ -562,7 +639,12 @@ function renderCreate() {
       delete window.postMediaBase64;
       alert('Post created!');
       loadView('feed');
-    } catch (err) { alert(err.message); }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
   });
 }
 
@@ -774,6 +856,8 @@ async function renderChats() {
         <div class="chat-input-area">
           <input type="text" id="chat-input" placeholder="Type a message...">
           <button id="send-chat"><i class="fas fa-paper-plane"></i></button>
+          <input type="file" id="chat-media" accept="image/*" hidden>
+          <button id="attach-chat-media" class="btn-icon"><i class="fas fa-image"></i></button>
         </div>
       </div>
     </div>
@@ -782,8 +866,25 @@ async function renderChats() {
   document.getElementById('show-contacts').addEventListener('click', loadContactsList);
   document.getElementById('show-groups').addEventListener('click', loadGroupsList);
   document.getElementById('new-group').addEventListener('click', openCreateGroupModal);
+  document.getElementById('attach-chat-media').addEventListener('click', () => {
+    document.getElementById('chat-media').click();
+  });
+  document.getElementById('chat-media').addEventListener('change', handleChatMedia);
 
   await loadChatsList();
+}
+
+let chatMediaBase64 = null;
+function handleChatMedia(e) {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      chatMediaBase64 = reader.result;
+      alert('Image attached. Send message to upload.');
+    };
+    reader.readAsDataURL(file);
+  }
 }
 
 async function loadChatsList() {
@@ -879,7 +980,7 @@ async function openChat(otherUserId, chatId) {
 
   if (!chatId) {
     const chats = await apiRequest('/api/chats');
-    const found = chats.find(c => c.otherUser._id === otherUserId);
+    const found = chats.find(c => c.otherUser?._id === otherUserId);
     if (found) {
       activeChatId = found._id;
     } else {
@@ -894,7 +995,11 @@ async function openChat(otherUserId, chatId) {
     document.getElementById('chat-messages').innerHTML = '';
   }
 
-  document.getElementById('chat-header').innerHTML = `<strong>Chat</strong>`;
+  const otherUser = await apiRequest(`/api/users/${otherUserId}`);
+  document.getElementById('chat-header').innerHTML = `
+    <img src="${otherUser.profilePic || 'https://via.placeholder.com/40'}" class="chat-avatar" style="width:40px; height:40px; border-radius:50%;">
+    <strong>${otherUser.name}</strong>
+  `;
   document.getElementById('send-chat').onclick = sendPrivateMessage;
   document.getElementById('chat-input').onkeypress = (e) => {
     if (e.key === 'Enter') sendPrivateMessage();
@@ -916,7 +1021,10 @@ async function openGroup(groupId) {
   socket.emit('join group', groupId);
 
   const group = await apiRequest(`/api/groups/${groupId}`);
-  document.getElementById('chat-header').innerHTML = `<strong>${group.name}</strong>`;
+  document.getElementById('chat-header').innerHTML = `
+    <img src="${group.dp || 'https://via.placeholder.com/40'}" class="chat-avatar" style="width:40px; height:40px; border-radius:50%;">
+    <strong>${group.name}</strong>
+  `;
   document.getElementById('send-chat').onclick = sendGroupMessage;
   document.getElementById('chat-input').onkeypress = (e) => {
     if (e.key === 'Enter') sendGroupMessage();
@@ -926,11 +1034,13 @@ async function openGroup(groupId) {
 function renderMessages(messages) {
   const container = document.getElementById('chat-messages');
   container.innerHTML = messages.map(m => {
-    const isOwn = m.sender === currentUser._id;
+    const isOwn = m.sender._id === currentUser._id;
     return `
       <div class="message ${isOwn ? 'own' : ''}">
-        ${!isOwn && m.senderName ? `<strong>${m.senderName}:</strong> ` : ''}
+        ${!isOwn ? `<img src="${m.sender.profilePic || 'https://via.placeholder.com/20'}" style="width:20px; height:20px; border-radius:50%; margin-right:5px;">` : ''}
+        ${!isOwn ? `<strong>${m.sender.name}:</strong> ` : ''}
         ${m.content}
+        ${m.media && m.media.length ? `<img src="${m.media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
         <span class="message-time">${formatTime(m.createdAt)}</span>
         ${isOwn ? `<span class="message-status">${m.readBy?.length > 1 ? '✓✓' : '✓'}</span>` : ''}
       </div>
@@ -941,38 +1051,48 @@ function renderMessages(messages) {
 
 async function sendPrivateMessage() {
   const text = document.getElementById('chat-input').value.trim();
-  if (!text || !currentChatUser) return;
+  const media = chatMediaBase64 ? [{ url: chatMediaBase64, type: 'image' }] : [];
+  if (!text && media.length === 0) return;
 
-  socket.emit('private message', { to: currentChatUser, content: text });
+  socket.emit('private message', { to: currentChatUser, content: text, media });
 
+  // Clear input and reset media
+  document.getElementById('chat-input').value = '';
+  chatMediaBase64 = null;
+
+  // Optimistically add message (will be replaced by actual from socket, but fine)
   const container = document.getElementById('chat-messages');
   container.innerHTML += `
     <div class="message own">
       ${text}
+      ${media.length ? `<img src="${media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
       <span class="message-time">${formatTime(new Date())}</span>
       <span class="message-status">✓</span>
     </div>
   `;
   container.scrollTop = container.scrollHeight;
-  document.getElementById('chat-input').value = '';
 }
 
 async function sendGroupMessage() {
   const text = document.getElementById('chat-input').value.trim();
-  if (!text || !currentGroup) return;
+  const media = chatMediaBase64 ? [{ url: chatMediaBase64, type: 'image' }] : [];
+  if (!text && media.length === 0) return;
 
-  socket.emit('group message', { groupId: currentGroup, content: text });
+  socket.emit('group message', { groupId: currentGroup, content: text, media });
+
+  document.getElementById('chat-input').value = '';
+  chatMediaBase64 = null;
 
   const container = document.getElementById('chat-messages');
   container.innerHTML += `
     <div class="message own">
       ${text}
+      ${media.length ? `<img src="${media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
       <span class="message-time">${formatTime(new Date())}</span>
       <span class="message-status">✓</span>
     </div>
   `;
   container.scrollTop = container.scrollHeight;
-  document.getElementById('chat-input').value = '';
 }
 
 function handleIncomingPrivateMessage(data) {
@@ -980,7 +1100,9 @@ function handleIncomingPrivateMessage(data) {
     const container = document.getElementById('chat-messages');
     container.innerHTML += `
       <div class="message">
-        ${data.content}
+        <img src="${data.fromAvatar || 'https://via.placeholder.com/20'}" style="width:20px; height:20px; border-radius:50%; margin-right:5px;">
+        <strong>${data.fromName}:</strong> ${data.content}
+        ${data.media && data.media.length ? `<img src="${data.media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
         <span class="message-time">${formatTime(data.createdAt)}</span>
       </div>
     `;
@@ -997,7 +1119,9 @@ function handleIncomingGroupMessage(data) {
     const container = document.getElementById('chat-messages');
     container.innerHTML += `
       <div class="message">
-        <strong>${data.fromName || 'User'}:</strong> ${data.content}
+        <img src="${data.fromAvatar || 'https://via.placeholder.com/20'}" style="width:20px; height:20px; border-radius:50%; margin-right:5px;">
+        <strong>${data.fromName}:</strong> ${data.content}
+        ${data.media && data.media.length ? `<img src="${data.media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
         <span class="message-time">${formatTime(data.createdAt)}</span>
       </div>
     `;
