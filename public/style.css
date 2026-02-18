@@ -331,7 +331,7 @@ body {
   object-fit: cover;
   border: 2px solid var(--primary);
 }
-.post-user { font-weight: 600; }
+.post-user { font-weight: 600; display: flex; align-items: center; gap: 5px; }
 .post-time { font-size: 0.75rem; color: var(--text-secondary); margin-left: auto; }
 .post-content { margin: 10px 0; line-height: 1.5; }
 .post-media { width: 100%; border-radius: 15px; margin: 10px 0; max-height: 400px; object-fit: cover; }
@@ -586,6 +586,20 @@ body {
   display: inline-block;
 }
 .message-status { font-size: 0.7rem; color: var(--text-secondary); margin-left: 5px; }
+.message .delete-message {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  display: none;
+}
+.message:hover .delete-message {
+  display: block;
+}
 .chat-input-area {
   display: flex;
   gap: 10px;
@@ -762,6 +776,15 @@ body {
   font-size: 0.9rem;
 }
 .creator-credit i { color: gold; }
+
+/* Group settings */
+#group-dp-preview img {
+  width: 50px;
+  height: 50px;
+  border-radius: 10px;
+  object-fit: cover;
+  margin-top: 10px;
+}
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; }
