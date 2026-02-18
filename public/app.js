@@ -1,3 +1,4 @@
+// ==================== Configuration ====================
 const API_BASE = '';
 let socket = null;
 let currentUser = null;
@@ -11,12 +12,19 @@ let stories = [];
 
 let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, headerLogout;
 
+// ==================== Helper Functions ====================
 function showLoading() { loadingEl?.classList.remove('hidden'); }
 function hideLoading() { loadingEl?.classList.add('hidden'); }
+
 function getToken() { return localStorage.getItem('token'); }
 function setToken(token) {
-  if (token) localStorage.setItem('token', token);
-  else localStorage.removeItem('token');
+  if (token) {
+    localStorage.setItem('token', token);
+    alert('✅ Token saved!'); // Visual feedback
+  } else {
+    localStorage.removeItem('token');
+    alert('❌ Token removed');
+  }
 }
 
 async function apiRequest(endpoint, options = {}) {
@@ -25,7 +33,10 @@ async function apiRequest(endpoint, options = {}) {
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
+  if (!res.ok) {
+    alert(`❌ API Error: ${data.error || 'Request failed'}`);
+    throw new Error(data.error || 'Request failed');
+  }
   return data;
 }
 
@@ -48,6 +59,7 @@ function formatTime(dateString) {
   return date.toLocaleDateString();
 }
 
+// ==================== Initialization ====================
 document.addEventListener('DOMContentLoaded', async () => {
   loadingEl = document.getElementById('loading');
   authContainer = document.getElementById('auth-container');
@@ -60,10 +72,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       showLoading();
       currentUser = await apiRequest('/api/auth/me');
+      alert('✅ Already logged in as ' + currentUser.username);
       authContainer.classList.add('hidden');
       mainContainer.classList.remove('hidden');
       initApp();
     } catch (err) {
+      alert('❌ Token invalid, logging out.');
       setToken(null);
       showAuth();
     } finally {
@@ -109,7 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         reader.readAsDataURL(blob);
         reader.onload = () => {
           window.regDpBase64 = reader.result;
-          alert('Image cropped. Complete registration.');
+          alert('✅ Image cropped. Complete registration.');
         };
       }, 'image/jpeg');
     }
@@ -133,6 +147,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('register-message').textContent = 'Registration successful!';
       document.getElementById('ssn-value').textContent = data.user.ssn;
       document.getElementById('ssn-display').classList.remove('hidden');
+      alert('✅ Registered and logged in as ' + data.user.username);
       setTimeout(() => window.location.reload(), 2000);
     } catch (err) {
       document.getElementById('register-message').style.color = 'red';
@@ -156,6 +171,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       currentUser = data.user;
       authContainer.classList.add('hidden');
       mainContainer.classList.remove('hidden');
+      alert('✅ Logged in as ' + data.user.username);
       initApp();
     } catch (err) {
       document.getElementById('login-message').style.color = 'red';
@@ -167,7 +183,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('copy-ssn').addEventListener('click', () => {
     navigator.clipboard.writeText(document.getElementById('ssn-value').textContent);
-    alert('SSN copied!');
+    alert('✅ SSN copied!');
   });
 
   headerLogout?.addEventListener('click', () => {
@@ -189,7 +205,8 @@ function showAuth() {
 
 function initApp() {
   socket = io({ auth: { token: getToken() } });
-  socket.on('connect', () => console.log('Socket connected'));
+  socket.on('connect', () => console.log('✅ Socket connected'));
+  socket.on('connect_error', (err) => alert('❌ Socket error: ' + err.message));
   socket.on('private message', handleIncomingPrivateMessage);
   socket.on('group message', handleIncomingGroupMessage);
   socket.on('system notification', (data) => {
@@ -222,7 +239,7 @@ function initApp() {
           method: 'POST',
           body: JSON.stringify({ message: msg })
         });
-        alert('Broadcast sent!');
+        alert('✅ Broadcast sent!');
         document.getElementById('bot-modal').classList.remove('active');
         document.getElementById('broadcast-message').value = '';
       } catch (err) {
@@ -234,7 +251,7 @@ function initApp() {
   document.getElementById('save-contact').addEventListener('click', async () => {
     const ssn = document.getElementById('contact-ssn').value.trim();
     const nickname = document.getElementById('contact-nickname').value.trim();
-    if (!ssn) return alert('Enter SSN');
+    if (!ssn) return alert('❌ Enter SSN');
     try {
       await apiRequest('/api/contacts', {
         method: 'POST',
@@ -243,7 +260,7 @@ function initApp() {
       document.getElementById('add-contact-modal').classList.remove('active');
       document.getElementById('contact-ssn').value = '';
       document.getElementById('contact-nickname').value = '';
-      alert('Contact added');
+      alert('✅ Contact added');
       if (document.getElementById('chats-view')?.classList.contains('active')) {
         loadView('chats');
       }
@@ -254,7 +271,7 @@ function initApp() {
 
   document.getElementById('create-group-btn').addEventListener('click', async () => {
     const name = document.getElementById('group-name').value.trim();
-    if (!name) return alert('Enter group name');
+    if (!name) return alert('❌ Enter group name');
     const selected = document.querySelectorAll('#contact-select-list input:checked');
     const members = Array.from(selected).map(cb => cb.value);
     try {
@@ -264,7 +281,7 @@ function initApp() {
       });
       document.getElementById('create-group-modal').classList.remove('active');
       document.getElementById('group-name').value = '';
-      alert('Group created');
+      alert('✅ Group created');
       loadView('chats');
     } catch (err) {
       alert(err.message);
@@ -328,7 +345,7 @@ async function loadStories() {
                 method: 'POST',
                 body: JSON.stringify({ media: reader.result })
               });
-              alert('Story posted!');
+              alert('✅ Story posted!');
               loadView('feed');
             } catch (err) {
               alert(err.message);
@@ -585,7 +602,7 @@ function renderCreate() {
       document.getElementById('post-content').value = '';
       document.getElementById('media-preview').innerHTML = '';
       delete window.postMediaBase64;
-      alert('Post created!');
+      alert('✅ Post created!');
       loadView('feed');
     } catch (err) {
       alert(err.message);
@@ -765,14 +782,14 @@ async function saveSettings() {
       body: JSON.stringify(updates)
     });
     currentUser = data;
-    alert('Settings updated');
+    alert('✅ Settings updated');
     loadView('profile', currentUser._id);
   } catch (err) { alert(err.message); }
 }
 
 async function deleteAccount() {
   const password = document.getElementById('delete-password').value;
-  if (!password) return alert('Enter your password');
+  if (!password) return alert('❌ Enter your password');
   if (!confirm('This will permanently delete your account. Are you sure?')) return;
   try {
     await apiRequest('/api/users/me', {
@@ -827,7 +844,7 @@ function handleChatMedia(e) {
     const reader = new FileReader();
     reader.onload = () => {
       chatMediaBase64 = reader.result;
-      alert('Image attached. Send message to upload.');
+      alert('✅ Image attached. Send message to upload.');
     };
     reader.readAsDataURL(file);
   }
