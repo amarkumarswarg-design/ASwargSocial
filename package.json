@@ -1,7 +1,7 @@
 {
-  "name": "swarg-social-backend",
+  "name": "swarg-social",
   "version": "1.0.0",
-  "description": "Backend for Swarg Social – a high‑end social platform",
+  "description": "A modern social media platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -9,17 +9,16 @@
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "cloudinary": "^1.41.0",
-    "dotenv": "^16.3.1",
+    "cloudinary": "^1.37.0",
+    "dotenv": "^16.0.3",
     "express": "^4.18.2",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^7.5.0",
-    "socket.io": "^4.7.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^7.2.0",
+    "socket.io": "^4.6.1"
   },
   "engines": {
-    "node": ">=18.0.0"
-  }
+    "node": ">=14.0.0"
+  },
+  "author": "Amar",
+  "license": "ISC"
 }
