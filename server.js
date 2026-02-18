@@ -274,17 +274,6 @@ app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
   }
 });
 
-    const [followersCount, followingCount, isFollowing] = await Promise.all([
-      Follow.countDocuments({ following: user._id }),
-      Follow.countDocuments({ follower: user._id }),
-      Follow.exists({ follower: req.user._id, following: user._id })
-    ]);
-    res.json({ ...user.toObject(), followersCount, followingCount, isFollowing: !!isFollowing });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
 app.put('/api/users/me', authMiddleware, async (req, res) => {
   try {
     const user = req.user;
@@ -768,3 +757,4 @@ app.get('*', (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+         
