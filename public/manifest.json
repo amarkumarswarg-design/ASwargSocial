@@ -1,7 +1,7 @@
 {
   "name": "Swarg Social",
   "short_name": "Swarg",
-  "description": "A smooth social platform with messaging, feed, and groups.",
+  "description": "A premium social platform with Telegram-style messaging, stories, and groups.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",
