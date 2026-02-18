@@ -26,28 +26,19 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-  console.error('❌ Cloudinary environment variables missing!');
-} else {
-  console.log('✅ Cloudinary configured');
-}
-
-// MongoDB
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
   connectTimeoutMS: 30000,
   socketTimeoutMS: 45000
-})
-.then(() => console.log('✅ MongoDB connected'))
-.catch(err => console.error('❌ MongoDB connection error:', err));
+}).then(() => console.log('✅ MongoDB connected'))
+  .catch(err => console.error('❌ MongoDB connection error:', err));
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -304,7 +295,6 @@ app.delete('/api/users/me', authMiddleware, async (req, res) => {
     if (!(await req.user.comparePassword(password))) {
       return res.status(400).json({ error: 'Invalid password' });
     }
-    // Cleanup Cloudinary
     if (req.user.profilePicPublicId) await cloudinary.uploader.destroy(req.user.profilePicPublicId);
     const posts = await Post.find({ user: req.user._id });
     for (const post of posts) {
@@ -330,9 +320,7 @@ app.delete('/api/users/me', authMiddleware, async (req, res) => {
 // ---- Follow ----
 app.post('/api/follow/:userId', authMiddleware, async (req, res) => {
   try {
-    if (req.params.userId === req.user._id.toString()) {
-      return res.status(400).json({ error: 'Cannot follow yourself' });
-    }
+    if (req.params.userId === req.user._id.toString()) return res.status(400).json({ error: 'Cannot follow yourself' });
     const exists = await Follow.findOne({ follower: req.user._id, following: req.params.userId });
     if (exists) return res.status(400).json({ error: 'Already following' });
     await Follow.create({ follower: req.user._id, following: req.params.userId });
@@ -494,9 +482,7 @@ app.post('/api/groups/:groupId/admins', authMiddleware, async (req, res) => {
     const { userId } = req.body;
     const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
     if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (group.owner.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Only owner can promote to admin' });
-    }
+    if (group.owner.toString() !== req.user._id.toString()) return res.status(403).json({ error: 'Only owner can promote to admin' });
     if (!group.members.includes(userId)) return res.status(400).json({ error: 'User not in group' });
     if (!group.admins.includes(userId)) {
       group.admins.push(userId);
@@ -512,9 +498,7 @@ app.delete('/api/groups/:groupId/admins/:userId', authMiddleware, async (req, re
   try {
     const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
     if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (group.owner.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Only owner can demote admin' });
-    }
+    if (group.owner.toString() !== req.user._id.toString()) return res.status(403).json({ error: 'Only owner can demote admin' });
     group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
     await group.save();
     res.json(group);
@@ -582,182 +566,4 @@ app.post('/api/posts', authMiddleware, async (req, res) => {
     await post.save();
     await post.populate('user', 'name username profilePic');
     res.status(201).json(post);
-  } catch (err) {
-    console.error('Post creation error:', err);
-    res.status(500).json({ error: 'Failed to create post' });
-  }
-});
-
-app.get('/api/posts/feed', authMiddleware, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const posts = await Post.find()
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * 10).limit(10)
-      .populate('user', 'name username profilePic')
-      .populate('comments.user', 'name username profilePic');
-    res.json(posts);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/api/posts/user/:userId', authMiddleware, async (req, res) => {
-  try {
-    const posts = await Post.find({ user: req.params.userId })
-      .sort({ createdAt: -1 })
-      .populate('user', 'name username profilePic')
-      .populate('comments.user', 'name username profilePic');
-    res.json(posts);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/api/posts/:postId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId)
-      .populate('user', 'name username profilePic')
-      .populate('comments.user', 'name username profilePic');
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    res.json(post);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/posts/:postId/like', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    const index = post.likes.indexOf(req.user._id);
-    if (index === -1) post.likes.push(req.user._id);
-    else post.likes.splice(index, 1);
-    await post.save();
-    res.json({ likes: post.likes });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.post('/api/posts/:postId/comment', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    post.comments.push({ user: req.user._id, text: req.body.text });
-    await post.save();
-    await post.populate('comments.user', 'name username profilePic');
-    res.json(post.comments);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.delete('/api/posts/:postId/comment/:commentId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    const comment = post.comments.id(req.params.commentId);
-    if (!comment) return res.status(404).json({ error: 'Comment not found' });
-    if (comment.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    comment.remove();
-    await post.save();
-    res.json({ message: 'Deleted' });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.delete('/api/posts/:postId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    // Delete media from Cloudinary
-    for (const m of post.media) {
-      if (m.publicId) await cloudinary.uploader.destroy(m.publicId);
-    }
-    await post.deleteOne(); // FIX: use deleteOne() instead of remove()
-    res.json({ message: 'Post deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Chat ----
-app.get('/api/chats', authMiddleware, async (req, res) => {
-  try {
-    const chats = await Chat.find({ participants: req.user._id })
-      .populate('participants', 'name username profilePic')
-      .populate('lastMessage')
-      .sort({ updatedAt: -1 });
-    res.json(chats.map(c => {
-      const other = c.participants.find(p => !p._id.equals(req.user._id));
-      return { _id: c._id, otherUser: other, lastMessage: c.lastMessage, updatedAt: c.updatedAt };
-    }));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
-  try {
-    const chat = await Chat.findOne({ _id: req.params.chatId, participants: req.user._id });
-    if (!chat) return res.status(404).json({ error: 'Chat not found' });
-    const messages = await Message.find({ chat: chat._id })
-      .populate('sender', 'name username profilePic')
-      .sort({ createdAt: 1 });
-    res.json(messages);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Group Messages ----
-app.get('/api/groups/:groupId/messages', authMiddleware, async (req, res) => {
-  try {
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    const messages = await Message.find({ group: group._id })
-      .populate('sender', 'name username profilePic')
-      .sort({ createdAt: 1 });
-    res.json(messages);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Bot ----
-app.post('/api/bot/login', async (req, res) => {
-  if (req.body.password !== BOT_SECRET) return res.status(401).json({ error: 'Invalid bot credentials' });
-  let bot = await User.findOne({ isBot: true });
-  if (!bot) {
-    bot = new User({
-      name: 'Swarg Social Bot',
-      username: 'swargbot',
-      password: Math.random().toString(36),
-      ssn: '+1(212)908-0000',
-      isBot: true
-    });
-    await bot.save();
-  }
-  res.json({ token: generateToken(bot), user: { ...bot.toObject(), password: undefined } });
-});
-
-app.post('/api/bot/broadcast', authMiddleware, async (req, res) => {
-  if (!req.user.isBot) return res.status(403).json({ error: 'Only bot can broadcast' });
-  io.emit('system notification', { message: req.body.message, from: 'Swarg Social Bot' });
-  res.json({ success: true });
-});
-
-// Catch‑all
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  } catch
