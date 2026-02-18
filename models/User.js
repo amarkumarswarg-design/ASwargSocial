@@ -2,47 +2,29 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
-  name: { 
-    type: String, 
-    required: true, 
-    trim: true 
+  name: { type: String, required: true, trim: true },
+  username: { type: String, required: true, unique: true, trim: true, lowercase: true },
+  password: { type: String, required: true },
+  ssn: { type: String, required: true, unique: true },
+  profilePic: { type: String, default: '' },
+  profilePicPublicId: { type: String, default: '' },
+  isBot: { type: Boolean, default: false },
+  verified: { type: Boolean, default: false },
+  ownerBadge: { type: Boolean, default: false },
+  bio: { type: String, default: '' },
+  work: { type: String, default: '' },
+  education: { type: String, default: '' },
+  location: { type: String, default: '' },
+  relationship: { type: String, default: '' },
+  privacy: {
+    bio: { type: String, enum: ['public', 'private'], default: 'public' },
+    work: { type: String, enum: ['public', 'private'], default: 'public' },
+    education: { type: String, enum: ['public', 'private'], default: 'public' },
+    location: { type: String, enum: ['public', 'private'], default: 'public' },
+    relationship: { type: String, enum: ['public', 'private'], default: 'public' }
   },
-  username: { 
-    type: String, 
-    required: true, 
-    unique: true, 
-    trim: true, 
-    lowercase: true 
-  },
-  password: { 
-    type: String, 
-    required: true 
-  },
-  ssn: { 
-    type: String, 
-    required: true, 
-    unique: true 
-  },
-  profilePic: { 
-    type: String, 
-    default: '' 
-  },
-  profilePicPublicId: { 
-    type: String, 
-    default: '' 
-  },
-  isBot: { 
-    type: Boolean, 
-    default: false 
-  },
-  createdAt: { 
-    type: Date, 
-    default: Date.now 
-  },
-  updatedAt: { 
-    type: Date, 
-    default: Date.now 
-  }
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
 // Hash password before saving
