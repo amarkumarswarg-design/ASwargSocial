@@ -45,3 +45,4 @@ document.querySelectorAll('.nav-item').forEach(item => {
 });
 
 document.addEventListener('DOMContentLoaded', initApp);
+    
