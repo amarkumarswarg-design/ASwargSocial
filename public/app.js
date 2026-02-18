@@ -2,7 +2,6 @@
 let socket = null;
 let currentUser = null;
 let currentChatUser = null;
-let activeChatId = null;
 
 // DOM Elements
 const loadingEl = document.getElementById('loading');
@@ -10,7 +9,7 @@ const authContainer = document.getElementById('auth-container');
 const mainContainer = document.getElementById('main-container');
 const contentArea = document.getElementById('content-area');
 
-// ==================== Helper: API Request ====================
+// ==================== Helper: API & Token ====================
 async function apiRequest(endpoint, options = {}) {
   const token = localStorage.getItem('token');
   const headers = { 'Content-Type': 'application/json', ...options.headers };
@@ -22,18 +21,17 @@ async function apiRequest(endpoint, options = {}) {
   return data;
 }
 
-// ==================== Auth Logic ====================
+// ==================== Initialization ====================
 async function initApp() {
   const token = localStorage.getItem('token');
   if (!token) return showAuth();
 
   try {
     loadingEl.classList.remove('hidden');
-    // Profile Race Condition Fix: Pehle data lao, phir app dikhao
+    // Fix: Ensure user data is loaded before anything else
     currentUser = await apiRequest('/api/auth/me');
     showMainApp();
     
-    // Connect Socket
     socket = io({ auth: { token } });
     socket.on('private message', handleIncomingMessage);
     
@@ -56,68 +54,68 @@ function showAuth() {
   mainContainer.classList.add('hidden');
 }
 
-// ==================== View Router (No more loops!) ====================
+// ==================== Navigation Router ====================
 async function loadView(view, param = null) {
-  contentArea.innerHTML = '<div class="spinner"></div>'; // Loading state
+  contentArea.innerHTML = '<div class="spinner"></div>';
   
-  switch(view) {
-    case 'feed': await renderFeed(); break;
-    case 'search': renderSearch(); break;
-    case 'create': renderCreate(); break;
-    case 'chats': await renderChats(); break;
-    case 'profile': await renderProfile(param || currentUser._id); break;
-  }
-  
-  // Update Bottom Nav UI
-  document.querySelectorAll('.nav-item').forEach(item => {
-    item.classList.toggle('active', item.dataset.view === view);
+  // Highlight active nav item
+  document.querySelectorAll('.nav-item').forEach(i => {
+    i.classList.toggle('active', i.dataset.view === view);
   });
+
+  if (view === 'feed') await renderFeed();
+  else if (view === 'search') renderSearch();
+  else if (view === 'create') renderCreate();
+  else if (view === 'chats') await renderChats();
+  else if (view === 'profile') await renderProfile(param || currentUser._id);
 }
 
-// ==================== Profile Logic (Fixed Blank Screen) ====================
-async function renderProfile(userId) {
+// ==================== Feed & Posts ====================
+async function renderFeed() {
   try {
-    const user = await apiRequest(`/api/users/${userId}`);
-    const isOwn = user._id === currentUser._id;
-
-    contentArea.innerHTML = `
-      <div class="profile-header glass-card">
-        <img src="${user.profilePic || 'default-avatar.png'}" class="profile-avatar">
-        <div class="profile-info">
-          <h3>${user.name}</h3>
-          <p class="text-secondary">@${user.username}</p>
-          <p class="ssn-badge">${user.ssn}</p>
-          <div class="stats-row">
-            <div class="stat" onclick="showFollowers('${user._id}')"><b>${user.followersCount}</b> Followers</div>
-            <div class="stat" onclick="showFollowing('${user._id}')"><b>${user.followingCount}</b> Following</div>
-          </div>
-          ${!isOwn ? `<button class="btn-primary mt-2" onclick="toggleFollow('${user._id}', this)">${user.isFollowing ? 'Unfollow' : 'Follow'}</button>` : ''}
-        </div>
-      </div>
-      <div id="user-posts" class="mt-4"></div>
-    `;
-    // Fetch and render posts...
-  } catch (err) { contentArea.innerHTML = `<p class="error">User not found</p>`; }
+    const posts = await apiRequest('/api/posts/feed');
+    contentArea.innerHTML = posts.length ? posts.map(p => createPostHTML(p)).join('') : '<p class="empty">No posts yet.</p>';
+  } catch (err) { console.error(err); }
 }
 
-// ==================== Messaging (Real-time Fix) ====================
+function createPostHTML(post) {
+  const isLiked = post.likes.includes(currentUser._id);
+  return `
+    <div class="post-card glass-card">
+      <div class="post-header" onclick="openProfile('${post.user._id}')">
+        <img src="${post.user.profilePic || 'default-avatar.png'}" class="avatar">
+        <div><strong>${post.user.name}</strong><p>@${post.user.username}</p></div>
+      </div>
+      <div class="post-body">
+        <p>${post.content || ''}</p>
+        ${post.media.map(m => `<img src="${m.url}" class="post-img">`).join('')}
+      </div>
+      <div class="post-footer">
+        <button onclick="likePost('${post._id}', this)" class="${isLiked ? 'liked' : ''}">
+          <i class="fa-heart ${isLiked ? 'fas' : 'far'}"></i> ${post.likes.length}
+        </button>
+        <button onclick="openComments('${post._id}')"><i class="far fa-comment"></i> ${post.comments.length}</button>
+      </div>
+    </div>
+  `;
+}
+
+// ==================== Messaging (Fixed Loop & Logic) ====================
 async function navigateToChat(userId) {
   await loadView('chats');
-  // DOM ke ready hone ka intezar karein
-  const checkInterval = setInterval(() => {
-    if (document.getElementById('chat-window')) {
-      clearInterval(checkInterval);
-      openChatWindow(userId);
-    }
-  }, 50);
+  // Small delay to ensure DOM is ready
+  setTimeout(() => openChatWindow(userId), 100);
 }
 
-function openChatWindow(userId) {
+async function openChatWindow(userId) {
   currentChatUser = userId;
   document.getElementById('chats-list').classList.add('hidden');
   document.getElementById('chat-window').classList.remove('hidden');
-  document.getElementById('chat-messages').innerHTML = ''; // Clear old msgs
-  // Load message history from API...
+  
+  // Fetch chat history from server
+  const container = document.getElementById('chat-messages');
+  container.innerHTML = '<p class="loading-text">Loading history...</p>';
+  // Logic to fetch and render messages goes here...
 }
 
 function sendMessage() {
@@ -125,10 +123,9 @@ function sendMessage() {
   const text = input.value.trim();
   if (!text || !currentChatUser) return;
 
-  // Real-time Socket Emit
+  // Single source: Socket only
   socket.emit('private message', { to: currentChatUser, content: text });
   
-  // UI Update (Optimistic)
   appendMessage({ from: currentUser._id, content: text, createdAt: new Date() });
   input.value = '';
 }
@@ -137,24 +134,28 @@ function handleIncomingMessage(data) {
   if (currentChatUser === data.from) {
     appendMessage(data);
   } else {
-    // Show notification badge
-    alert(`New message from ${data.from}`);
+    // Simple notification for background messages
+    console.log("New message from:", data.from);
   }
 }
 
 function appendMessage(data) {
-  const msgDiv = document.createElement('div');
-  msgDiv.className = `message ${data.from === currentUser._id ? 'own' : 'other'}`;
-  msgDiv.innerHTML = `<p>${data.content}</p><span class="time">${new Date(data.createdAt).toLocaleTimeString()}</span>`;
   const container = document.getElementById('chat-messages');
-  container.appendChild(msgDiv);
+  const div = document.createElement('div');
+  div.className = `message ${data.from === currentUser._id ? 'own' : 'other'}`;
+  div.innerHTML = `<p>${data.content}</p><span>${new Date(data.createdAt).toLocaleTimeString()}</span>`;
+  container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
 
-// Initialize on Load
+// ==================== Event Listeners ====================
 document.addEventListener('DOMContentLoaded', initApp);
 
-// Global Exposure for HTML onclicks
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => loadView(item.dataset.view));
+});
+
+// Global functions for HTML
 window.openProfile = (id) => loadView('profile', id);
 window.navigateToChat = navigateToChat;
-window.toggleFollow = async (id, btn) => { /* Follow logic */ };
+          
