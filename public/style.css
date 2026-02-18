@@ -629,3 +629,28 @@ body {
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+
+/* Mobile responsiveness */
+@media (max-width: 450px) {
+  .profile-header {
+    flex-direction: column;
+    text-align: center;
+  }
+  .profile-avatar {
+    margin-bottom: 10px;
+  }
+  .profile-stats {
+    justify-content: center;
+  }
+  .post-avatar {
+    width: 30px;
+    height: 30px;
+  }
+  .chat-header img {
+    width: 30px;
+    height: 30px;
+  }
+  .message img {
+    max-width: 100px;
+  }
+}
