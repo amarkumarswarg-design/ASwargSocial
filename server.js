@@ -245,10 +245,34 @@ app.get('/api/users/search', authMiddleware, async (req, res) => {
 
 app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
   try {
-    const user = await User.findOne({
-      $or: [{ username: req.params.identifier.toLowerCase() }, { ssn: req.params.identifier }]
-    }).select('-password');
+    const identifier = req.params.identifier;
+    let query;
+
+    // Check if identifier is a valid MongoDB ObjectId
+    if (mongoose.Types.ObjectId.isValid(identifier)) {
+      query = { _id: identifier };
+    } else {
+      query = {
+        $or: [
+          { username: identifier.toLowerCase() },
+          { ssn: identifier }
+        ]
+      };
+    }
+
+    const user = await User.findOne(query).select('-password');
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const [followersCount, followingCount, isFollowing] = await Promise.all([
+      Follow.countDocuments({ following: user._id }),
+      Follow.countDocuments({ follower: user._id }),
+      Follow.exists({ follower: req.user._id, following: user._id })
+    ]);
+    res.json({ ...user.toObject(), followersCount, followingCount, isFollowing: !!isFollowing });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
     const [followersCount, followingCount, isFollowing] = await Promise.all([
       Follow.countDocuments({ following: user._id }),
