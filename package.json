@@ -1,7 +1,7 @@
 {
   "name": "swarg-social-backend",
-  "version": "2.0.0",
-  "description": "Backend for Swarg Social – high‑end social platform",
+  "version": "3.0.0",
+  "description": "Backend for Swarg Social V3 – Telegram-style messaging, stories, groups",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
