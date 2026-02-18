@@ -14,6 +14,9 @@ const Counter = require('./models/Counter');
 const Follow = require('./models/Follow');
 const Chat = require('./models/Chat');
 const Message = require('./models/Message');
+const Group = require('./models/Group');
+const Story = require('./models/Story');
+const Contact = require('./models/Contact');
 
 const app = express();
 const server = http.createServer(app);
@@ -31,7 +34,6 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Verify Cloudinary environment variables
 if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
   console.error('❌ Cloudinary environment variables missing!');
 } else {
@@ -98,16 +100,23 @@ io.on('connection', (socket) => {
   console.log('🔌 Socket connected:', socket.userId);
   socket.join(socket.userId);
 
+  // Join group rooms
+  socket.on('join group', (groupId) => {
+    socket.join(`group_${groupId}`);
+  });
+
+  socket.on('leave group', (groupId) => {
+    socket.leave(`group_${groupId}`);
+  });
+
   socket.on('private message', async (data) => {
     try {
       const { to, content } = data;
-      // Find or create chat
       let chat = await Chat.findOne({ participants: { $all: [socket.userId, to] } });
       if (!chat) {
         chat = new Chat({ participants: [socket.userId, to] });
         await chat.save();
       }
-      // Save message
       const message = new Message({
         chat: chat._id,
         sender: socket.userId,
@@ -119,7 +128,6 @@ io.on('connection', (socket) => {
       chat.updatedAt = Date.now();
       await chat.save();
 
-      // Emit to recipient
       io.to(to).emit('private message', {
         _id: message._id,
         from: socket.userId,
@@ -128,6 +136,35 @@ io.on('connection', (socket) => {
       });
     } catch (err) {
       console.error('Socket message error:', err);
+    }
+  });
+
+  socket.on('group message', async (data) => {
+    try {
+      const { groupId, content } = data;
+      const group = await Group.findById(groupId);
+      if (!group || !group.members.includes(socket.userId)) return;
+
+      const message = new Message({
+        group: groupId,
+        sender: socket.userId,
+        content,
+        readBy: [socket.userId]
+      });
+      await message.save();
+      group.lastMessage = message._id;
+      group.updatedAt = Date.now();
+      await group.save();
+
+      io.to(`group_${groupId}`).emit('group message', {
+        _id: message._id,
+        from: socket.userId,
+        content,
+        createdAt: message.createdAt,
+        groupId
+      });
+    } catch (err) {
+      console.error('Socket group message error:', err);
     }
   });
 
@@ -271,9 +308,15 @@ app.delete('/api/users/me', authMiddleware, async (req, res) => {
       for (const m of post.media) if (m.publicId) await cloudinary.uploader.destroy(m.publicId);
     }
     await Post.deleteMany({ user: req.user._id });
+    await Story.deleteMany({ user: req.user._id });
     await Follow.deleteMany({ $or: [{ follower: req.user._id }, { following: req.user._id }] });
     await Message.deleteMany({ sender: req.user._id });
     await Chat.deleteMany({ participants: req.user._id });
+    await Group.updateMany(
+      { members: req.user._id },
+      { $pull: { members: req.user._id, admins: req.user._id } }
+    );
+    await Contact.deleteMany({ $or: [{ owner: req.user._id }, { contact: req.user._id }] });
     await User.findByIdAndDelete(req.user._id);
     res.json({ message: 'Account deleted' });
   } catch (err) {
@@ -318,6 +361,162 @@ app.get('/api/users/:userId/following', authMiddleware, async (req, res) => {
   try {
     const follows = await Follow.find({ follower: req.params.userId }).populate('following', 'name username profilePic ssn');
     res.json(follows.map(f => f.following));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Contacts ----
+app.get('/api/contacts', authMiddleware, async (req, res) => {
+  try {
+    const contacts = await Contact.find({ owner: req.user._id }).populate('contact', 'name username profilePic ssn');
+    res.json(contacts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts', authMiddleware, async (req, res) => {
+  try {
+    const { contactSsn, nickname } = req.body;
+    const contactUser = await User.findOne({ ssn: contactSsn });
+    if (!contactUser) return res.status(404).json({ error: 'User not found' });
+    if (contactUser._id.equals(req.user._id)) return res.status(400).json({ error: 'Cannot add yourself' });
+
+    const existing = await Contact.findOne({ owner: req.user._id, contact: contactUser._id });
+    if (existing) return res.status(400).json({ error: 'Contact already exists' });
+
+    const contact = new Contact({
+      owner: req.user._id,
+      contact: contactUser._id,
+      nickname: nickname || contactUser.name
+    });
+    await contact.save();
+    res.json(contact);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/contacts/:contactId', authMiddleware, async (req, res) => {
+  try {
+    await Contact.findOneAndDelete({ _id: req.params.contactId, owner: req.user._id });
+    res.json({ message: 'Contact removed' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Groups ----
+app.post('/api/groups', authMiddleware, async (req, res) => {
+  try {
+    const { name, members } = req.body; // members is array of userIds
+    const allMembers = [req.user._id, ...(members || [])];
+    const group = new Group({
+      name,
+      owner: req.user._id,
+      admins: [req.user._id],
+      members: allMembers
+    });
+    await group.save();
+    res.json(group);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/groups', authMiddleware, async (req, res) => {
+  try {
+    const groups = await Group.find({ members: req.user._id })
+      .populate('owner', 'name username profilePic')
+      .populate('admins', 'name username profilePic')
+      .populate('members', 'name username profilePic')
+      .populate('lastMessage');
+    res.json(groups);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/groups/:groupId', authMiddleware, async (req, res) => {
+  try {
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id })
+      .populate('owner', 'name username profilePic')
+      .populate('admins', 'name username profilePic')
+      .populate('members', 'name username profilePic')
+      .populate('lastMessage');
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    res.json(group);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/groups/:groupId/members', authMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (!group.admins.includes(req.user._id)) return res.status(403).json({ error: 'Not authorized' });
+
+    if (!group.members.includes(userId)) {
+      group.members.push(userId);
+      await group.save();
+    }
+    res.json(group);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/groups/:groupId/members/:userId', authMiddleware, async (req, res) => {
+  try {
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (!group.admins.includes(req.user._id) && req.user._id.toString() !== req.params.userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    group.members = group.members.filter(id => id.toString() !== req.params.userId);
+    group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
+    await group.save();
+    res.json(group);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Stories ----
+app.post('/api/stories', authMiddleware, async (req, res) => {
+  try {
+    const { media } = req.body; // base64 image
+    let mediaUrl = '', mediaPublicId = '';
+    if (media?.startsWith('data:image')) {
+      const upload = await cloudinary.uploader.upload(media, { folder: 'swarg_social/stories' });
+      mediaUrl = upload.secure_url;
+      mediaPublicId = upload.public_id;
+    }
+    const story = new Story({
+      user: req.user._id,
+      media: { url: mediaUrl, publicId: mediaPublicId, type: 'image' },
+      expiresAt: new Date(Date.now() + 24*60*60*1000) // 24 hours
+    });
+    await story.save();
+    res.json(story);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/stories/feed', authMiddleware, async (req, res) => {
+  try {
+    const following = await Follow.find({ follower: req.user._id }).distinct('following');
+    following.push(req.user._id);
+    const stories = await Story.find({
+      user: { $in: following },
+      expiresAt: { $gt: new Date() }
+    }).populate('user', 'name username profilePic').sort({ createdAt: -1 });
+    res.json(stories);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -459,6 +658,18 @@ app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
     const chat = await Chat.findOne({ _id: req.params.chatId, participants: req.user._id });
     if (!chat) return res.status(404).json({ error: 'Chat not found' });
     const messages = await Message.find({ chat: chat._id }).sort({ createdAt: 1 });
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Group Messages ----
+app.get('/api/groups/:groupId/messages', authMiddleware, async (req, res) => {
+  try {
+    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    const messages = await Message.find({ group: group._id }).sort({ createdAt: 1 });
     res.json(messages);
   } catch (err) {
     res.status(500).json({ error: err.message });
