@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const cloudinary = require('cloudinary').v2;
+const crypto = require('crypto');
 
 // Import models
 const User = require('./models/User');
@@ -17,6 +18,7 @@ const Message = require('./models/Message');
 const Group = require('./models/Group');
 const Story = require('./models/Story');
 const Contact = require('./models/Contact');
+const Invite = require('./models/Invite');
 
 const app = express();
 const server = http.createServer(app);
@@ -113,12 +115,14 @@ io.on('connection', (socket) => {
       chat.updatedAt = Date.now();
       await chat.save();
 
-      await message.populate('sender', 'name username profilePic');
+      await message.populate('sender', 'name username profilePic verified ownerBadge');
       io.to(to).emit('private message', {
         _id: message._id,
         from: socket.userId,
         fromName: message.sender.name,
         fromAvatar: message.sender.profilePic,
+        fromVerified: message.sender.verified,
+        fromOwner: message.sender.ownerBadge,
         content,
         media: message.media,
         createdAt: message.createdAt
@@ -146,12 +150,14 @@ io.on('connection', (socket) => {
       group.updatedAt = Date.now();
       await group.save();
 
-      await message.populate('sender', 'name username profilePic');
+      await message.populate('sender', 'name username profilePic verified ownerBadge');
       io.to(`group_${groupId}`).emit('group message', {
         _id: message._id,
         from: socket.userId,
         fromName: message.sender.name,
         fromAvatar: message.sender.profilePic,
+        fromVerified: message.sender.verified,
+        fromOwner: message.sender.ownerBadge,
         content,
         media: message.media,
         createdAt: message.createdAt,
@@ -200,7 +206,21 @@ app.post('/api/auth/register', async (req, res) => {
       password,
       ssn,
       profilePic: profilePicUrl,
-      profilePicPublicId
+      profilePicPublicId,
+      verified: false,
+      ownerBadge: false,
+      bio: '',
+      work: '',
+      education: '',
+      location: '',
+      relationship: '',
+      privacy: {
+        bio: 'public',
+        work: 'public',
+        education: 'public',
+        location: 'public',
+        relationship: 'public'
+      }
     });
     await user.save();
 
@@ -229,15 +249,55 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/auth/me', authMiddleware, (req, res) => res.json(req.user));
 
 // ---- Users ----
+app.get('/api/users/all', authMiddleware, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const users = await User.find({ _id: { $ne: req.user._id } })
+      .select('name username profilePic ssn verified ownerBadge')
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .sort({ createdAt: -1 });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 app.get('/api/users/search', authMiddleware, async (req, res) => {
   try {
     const { q } = req.query;
     if (!q) return res.json([]);
     const users = await User.find({ username: { $regex: q, $options: 'i' } })
-      .select('name username profilePic ssn').limit(20);
+      .select('name username profilePic ssn verified ownerBadge').limit(20);
     const following = await Follow.find({ follower: req.user._id }).distinct('following');
     const followingSet = new Set(following.map(id => id.toString()));
     res.json(users.map(u => ({ ...u.toObject(), isFollowing: followingSet.has(u._id.toString()) })));
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/users/suggestions', authMiddleware, async (req, res) => {
+  try {
+    // Simple suggestion: users followed by people you follow, excluding yourself and already followed
+    const following = await Follow.find({ follower: req.user._id }).distinct('following');
+    const followingsSet = new Set(following.map(id => id.toString()));
+    followingsSet.add(req.user._id.toString());
+
+    // Find users followed by people you follow
+    const suggestions = await Follow.aggregate([
+      { $match: { follower: { $in: following } } },
+      { $group: { _id: '$following', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: Array.from(followingsSet) } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ]);
+
+    const suggestedIds = suggestions.map(s => s._id);
+    const users = await User.find({ _id: { $in: suggestedIds } })
+      .select('name username profilePic verified ownerBadge');
+    res.json(users);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -248,7 +308,6 @@ app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
     const identifier = req.params.identifier;
     let query;
 
-    // Check if identifier is a valid MongoDB ObjectId
     if (mongoose.Types.ObjectId.isValid(identifier)) {
       query = { _id: identifier };
     } else {
@@ -268,7 +327,19 @@ app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
       Follow.countDocuments({ follower: user._id }),
       Follow.exists({ follower: req.user._id, following: user._id })
     ]);
-    res.json({ ...user.toObject(), followersCount, followingCount, isFollowing: !!isFollowing });
+
+    // Auto‑verify if followers >= 100 (unless owner badge)
+    if (!user.verified && !user.ownerBadge && followersCount >= 100) {
+      user.verified = true;
+      await user.save();
+    }
+
+    res.json({
+      ...user.toObject(),
+      followersCount,
+      followingCount,
+      isFollowing: !!isFollowing
+    });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -277,7 +348,8 @@ app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
 app.put('/api/users/me', authMiddleware, async (req, res) => {
   try {
     const user = req.user;
-    const { name, username, password, profilePic } = req.body;
+    const { name, username, password, profilePic, bio, work, education, location, relationship, privacy } = req.body;
+
     if (username && username !== user.username) {
       if (await User.findOne({ username: username.toLowerCase() })) {
         return res.status(400).json({ error: 'Username taken' });
@@ -286,6 +358,12 @@ app.put('/api/users/me', authMiddleware, async (req, res) => {
     }
     if (name) user.name = name;
     if (password) user.password = password;
+    if (bio !== undefined) user.bio = bio;
+    if (work !== undefined) user.work = work;
+    if (education !== undefined) user.education = education;
+    if (location !== undefined) user.location = location;
+    if (relationship !== undefined) user.relationship = relationship;
+    if (privacy) user.privacy = { ...user.privacy, ...privacy };
 
     if (profilePic?.startsWith('data:image')) {
       if (user.profilePicPublicId) await cloudinary.uploader.destroy(user.profilePicPublicId);
@@ -337,6 +415,15 @@ app.post('/api/follow/:userId', authMiddleware, async (req, res) => {
     const exists = await Follow.findOne({ follower: req.user._id, following: req.params.userId });
     if (exists) return res.status(400).json({ error: 'Already following' });
     await Follow.create({ follower: req.user._id, following: req.params.userId });
+
+    // Check if the followed user should be verified
+    const followedUser = await User.findById(req.params.userId);
+    const followersCount = await Follow.countDocuments({ following: followedUser._id });
+    if (!followedUser.verified && !followedUser.ownerBadge && followersCount >= 100) {
+      followedUser.verified = true;
+      await followedUser.save();
+    }
+
     res.json({ message: 'Followed' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -354,7 +441,7 @@ app.delete('/api/follow/:userId', authMiddleware, async (req, res) => {
 
 app.get('/api/users/:userId/followers', authMiddleware, async (req, res) => {
   try {
-    const follows = await Follow.find({ following: req.params.userId }).populate('follower', 'name username profilePic ssn');
+    const follows = await Follow.find({ following: req.params.userId }).populate('follower', 'name username profilePic ssn verified ownerBadge');
     res.json(follows.map(f => f.follower));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -363,7 +450,7 @@ app.get('/api/users/:userId/followers', authMiddleware, async (req, res) => {
 
 app.get('/api/users/:userId/following', authMiddleware, async (req, res) => {
   try {
-    const follows = await Follow.find({ follower: req.params.userId }).populate('following', 'name username profilePic ssn');
+    const follows = await Follow.find({ follower: req.params.userId }).populate('following', 'name username profilePic ssn verified ownerBadge');
     res.json(follows.map(f => f.following));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -373,7 +460,7 @@ app.get('/api/users/:userId/following', authMiddleware, async (req, res) => {
 // ---- Contacts ----
 app.get('/api/contacts', authMiddleware, async (req, res) => {
   try {
-    const contacts = await Contact.find({ owner: req.user._id }).populate('contact', 'name username profilePic ssn');
+    const contacts = await Contact.find({ owner: req.user._id }).populate('contact', 'name username profilePic ssn verified ownerBadge');
     res.json(contacts);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -432,9 +519,9 @@ app.post('/api/groups', authMiddleware, async (req, res) => {
 app.get('/api/groups', authMiddleware, async (req, res) => {
   try {
     const groups = await Group.find({ members: req.user._id })
-      .populate('owner', 'name username profilePic')
-      .populate('admins', 'name username profilePic')
-      .populate('members', 'name username profilePic')
+      .populate('owner', 'name username profilePic verified ownerBadge')
+      .populate('admins', 'name username profilePic verified ownerBadge')
+      .populate('members', 'name username profilePic verified ownerBadge')
       .populate('lastMessage');
     res.json(groups);
   } catch (err) {
@@ -445,9 +532,9 @@ app.get('/api/groups', authMiddleware, async (req, res) => {
 app.get('/api/groups/:groupId', authMiddleware, async (req, res) => {
   try {
     const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id })
-      .populate('owner', 'name username profilePic')
-      .populate('admins', 'name username profilePic')
-      .populate('members', 'name username profilePic')
+      .populate('owner', 'name username profilePic verified ownerBadge')
+      .populate('admins', 'name username profilePic verified ownerBadge')
+      .populate('members', 'name username profilePic verified ownerBadge')
       .populate('lastMessage');
     if (!group) return res.status(404).json({ error: 'Group not found' });
     res.json(group);
@@ -475,6 +562,7 @@ app.post('/api/groups/:groupId/members', authMiddleware, async (req, res) => {
 
 app.delete('/api/groups/:groupId/members/:userId', authMiddleware, async (req, res) => {
   try {
+    const { reason } = req.body;
     const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
     if (!group) return res.status(404).json({ error: 'Group not found' });
     if (!group.admins.includes(req.user._id) && req.user._id.toString() !== req.params.userId) {
@@ -484,277 +572,7 @@ app.delete('/api/groups/:groupId/members/:userId', authMiddleware, async (req, r
     group.members = group.members.filter(id => id.toString() !== req.params.userId);
     group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
     await group.save();
+
+    // TODO: Notify removed user with reason via bot
     res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/groups/:groupId/admins', authMiddleware, async (req, res) => {
-  try {
-    const { userId } = req.body;
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (group.owner.toString() !== req.user._id.toString()) return res.status(403).json({ error: 'Only owner can promote to admin' });
-    if (!group.members.includes(userId)) return res.status(400).json({ error: 'User not in group' });
-    if (!group.admins.includes(userId)) {
-      group.admins.push(userId);
-      await group.save();
-    }
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/groups/:groupId/admins/:userId', authMiddleware, async (req, res) => {
-  try {
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (group.owner.toString() !== req.user._id.toString()) return res.status(403).json({ error: 'Only owner can demote admin' });
-    group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
-    await group.save();
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Stories ----
-app.post('/api/stories', authMiddleware, async (req, res) => {
-  try {
-    const { media } = req.body;
-    if (!media?.startsWith('data:image')) return res.status(400).json({ error: 'Invalid image' });
-    const upload = await cloudinary.uploader.upload(media, { folder: 'swarg_social/stories' });
-    const story = new Story({
-      user: req.user._id,
-      media: { url: upload.secure_url, publicId: upload.public_id, type: 'image' },
-      expiresAt: new Date(Date.now() + 24*60*60*1000)
-    });
-    await story.save();
-    res.json(story);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/stories/feed', authMiddleware, async (req, res) => {
-  try {
-    const following = await Follow.find({ follower: req.user._id }).distinct('following');
-    following.push(req.user._id);
-    const stories = await Story.find({
-      user: { $in: following },
-      expiresAt: { $gt: new Date() }
-    }).populate('user', 'name username profilePic').sort({ createdAt: -1 });
-    res.json(stories);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Posts ----
-app.post('/api/posts', authMiddleware, async (req, res) => {
-  try {
-    const { content, media } = req.body;
-    const processedMedia = [];
-    if (media?.length) {
-      for (const item of media) {
-        if (item.url?.startsWith('data:image')) {
-          try {
-            const upload = await cloudinary.uploader.upload(item.url, {
-              folder: 'swarg_social/posts',
-              timeout: 60000
-            });
-            processedMedia.push({ url: upload.secure_url, publicId: upload.public_id, type: 'image' });
-          } catch (uploadErr) {
-            console.error('Cloudinary upload error:', uploadErr);
-            return res.status(500).json({ error: 'Image upload failed: ' + uploadErr.message });
-          }
-        } else {
-          processedMedia.push(item);
-        }
-      }
-    }
-    const post = new Post({ user: req.user._id, content, media: processedMedia });
-    await post.save();
-    await post.populate('user', 'name username profilePic');
-    res.status(201).json(post);
-  } catch (err) {
-    console.error('Post creation error:', err);
-    res.status(500).json({ error: 'Failed to create post' });
-  }
-});
-
-app.get('/api/posts/feed', authMiddleware, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const posts = await Post.find()
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * 10).limit(10)
-      .populate('user', 'name username profilePic')
-      .populate('comments.user', 'name username profilePic');
-    res.json(posts);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/api/posts/user/:userId', authMiddleware, async (req, res) => {
-  try {
-    const posts = await Post.find({ user: req.params.userId })
-      .sort({ createdAt: -1 })
-      .populate('user', 'name username profilePic')
-      .populate('comments.user', 'name username profilePic');
-    res.json(posts);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/api/posts/:postId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId)
-      .populate('user', 'name username profilePic')
-      .populate('comments.user', 'name username profilePic');
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    res.json(post);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/posts/:postId/like', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    const index = post.likes.indexOf(req.user._id);
-    if (index === -1) post.likes.push(req.user._id);
-    else post.likes.splice(index, 1);
-    await post.save();
-    res.json({ likes: post.likes });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.post('/api/posts/:postId/comment', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    post.comments.push({ user: req.user._id, text: req.body.text });
-    await post.save();
-    await post.populate('comments.user', 'name username profilePic');
-    res.json(post.comments);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.delete('/api/posts/:postId/comment/:commentId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    const comment = post.comments.id(req.params.commentId);
-    if (!comment) return res.status(404).json({ error: 'Comment not found' });
-    if (comment.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    comment.remove();
-    await post.save();
-    res.json({ message: 'Deleted' });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.delete('/api/posts/:postId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    for (const m of post.media) {
-      if (m.publicId) await cloudinary.uploader.destroy(m.publicId);
-    }
-    await post.deleteOne();
-    res.json({ message: 'Post deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Chat ----
-app.get('/api/chats', authMiddleware, async (req, res) => {
-  try {
-    const chats = await Chat.find({ participants: req.user._id })
-      .populate('participants', 'name username profilePic')
-      .populate('lastMessage')
-      .sort({ updatedAt: -1 });
-    res.json(chats.map(c => {
-      const other = c.participants.find(p => !p._id.equals(req.user._id));
-      return { _id: c._id, otherUser: other, lastMessage: c.lastMessage, updatedAt: c.updatedAt };
-    }));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
-  try {
-    const chat = await Chat.findOne({ _id: req.params.chatId, participants: req.user._id });
-    if (!chat) return res.status(404).json({ error: 'Chat not found' });
-    const messages = await Message.find({ chat: chat._id })
-      .populate('sender', 'name username profilePic')
-      .sort({ createdAt: 1 });
-    res.json(messages);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Group Messages ----
-app.get('/api/groups/:groupId/messages', authMiddleware, async (req, res) => {
-  try {
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    const messages = await Message.find({ group: group._id })
-      .populate('sender', 'name username profilePic')
-      .sort({ createdAt: 1 });
-    res.json(messages);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Bot ----
-app.post('/api/bot/login', async (req, res) => {
-  if (req.body.password !== BOT_SECRET) return res.status(401).json({ error: 'Invalid bot credentials' });
-  let bot = await User.findOne({ isBot: true });
-  if (!bot) {
-    bot = new User({
-      name: 'Swarg Social Bot',
-      username: 'swargbot',
-      password: Math.random().toString(36),
-      ssn: '+1(212)908-0000',
-      isBot: true
-    });
-    await bot.save();
-  }
-  res.json({ token: generateToken(bot), user: { ...bot.toObject(), password: undefined } });
-});
-
-app.post('/api/bot/broadcast', authMiddleware, async (req, res) => {
-  if (!req.user.isBot) return res.status(403).json({ error: 'Only bot can broadcast' });
-  io.emit('system notification', { message: req.body.message, from: 'Swarg Social Bot' });
-  res.json({ success: true });
-});
-
-// Catch‑all
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-         
+  } catch 
