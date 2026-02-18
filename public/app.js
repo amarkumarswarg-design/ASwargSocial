@@ -263,6 +263,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Group settings
   document.getElementById('generate-invite')?.addEventListener('click', generateInviteLink);
+  document.getElementById('update-group')?.addEventListener('click', updateGroup);
+  document.getElementById('copy-invite')?.addEventListener('click', copyInviteLink);
 });
 
 function showAuth() {
@@ -276,6 +278,7 @@ function initApp() {
   socket.on('connect_error', (err) => showPopup('Socket connection error: ' + err.message, 'error'));
   socket.on('private message', handleIncomingPrivateMessage);
   socket.on('group message', handleIncomingGroupMessage);
+  socket.on('message deleted', handleMessageDeleted);
   socket.on('system notification', (data) => {
     showPopup(`🔊 ${data.from}: ${data.message}`, 'info');
   });
@@ -443,6 +446,35 @@ function showStory(story) {
   const modal = document.getElementById('story-viewer-modal');
   document.getElementById('story-username').textContent = story.user.username;
   document.getElementById('story-image-container').innerHTML = `<img src="${story.media.url}" alt="Story">`;
+  document.getElementById('story-likes').textContent = story.viewers.length;
+  const likeBtn = document.getElementById('like-story');
+  const deleteBtn = document.getElementById('delete-story');
+  
+  likeBtn.classList.toggle('liked', story.viewers.includes(currentUser._id));
+  likeBtn.onclick = async () => {
+    try {
+      const data = await apiRequest(`/api/stories/${story._id}/like`, { method: 'POST' });
+      document.getElementById('story-likes').textContent = data.viewers.length;
+      likeBtn.classList.toggle('liked');
+    } catch (err) {
+      showPopup(err.message, 'error');
+    }
+  };
+  
+  deleteBtn.onclick = async () => {
+    if (story.user._id !== currentUser._id) return showPopup('You can only delete your own stories', 'warning');
+    showPopup('Delete this story?', 'confirm', async (confirmed) => {
+      if (confirmed) {
+        try {
+          await apiRequest(`/api/stories/${story._id}`, { method: 'DELETE' });
+          modal.classList.remove('active');
+          loadView('feed');
+        } catch (err) {
+          showPopup(err.message, 'error');
+        }
+      }
+    });
+  };
   modal.classList.add('active');
 }
 
@@ -578,7 +610,6 @@ async function renderSearch() {
     </div>
   `;
   document.getElementById('search-input').addEventListener('input', debounce(handleSearch, 500));
-  // Load all users initially
   await loadAllUsers();
 }
 
@@ -744,6 +775,7 @@ async function renderProfile(userId) {
             </div>
             ${!isOwn ? `<button class="follow-btn btn-primary" data-user-id="${userId}">${user.isFollowing ? 'Unfollow' : 'Follow'}</button>` : ''}
             ${isOwn ? `<button class="edit-profile-btn btn-secondary" id="open-edit-profile"><i class="fas fa-edit"></i> Edit Profile</button>` : ''}
+            ${!isOwn ? `<button class="add-contact-btn btn-secondary" data-user-id="${userId}"><i class="fas fa-user-plus"></i> Add Contact</button>` : ''}
           </div>
         </div>
 
@@ -780,6 +812,10 @@ async function renderProfile(userId) {
       document.querySelector('.follow-btn').addEventListener('click', async (e) => {
         const btn = e.currentTarget;
         await toggleFollow(userId, btn);
+      });
+      document.querySelector('.add-contact-btn').addEventListener('click', async () => {
+        document.getElementById('contact-ssn').value = user.ssn;
+        document.getElementById('add-contact-modal').classList.add('active');
       });
     } else {
       document.getElementById('open-edit-profile').addEventListener('click', openEditProfileModal);
@@ -1176,17 +1212,37 @@ function renderMessages(messages, type) {
     }
     const timeStr = formatExactTime(m.createdAt);
     return headerHtml + `
-      <div class="message ${isOwn ? 'own' : ''}">
+      <div class="message ${isOwn ? 'own' : ''}" data-message-id="${m._id}">
         ${!isOwn && type === 'group' ? `<img src="${m.sender.profilePic || 'https://via.placeholder.com/20'}" style="width:20px; height:20px; border-radius:50%; margin-right:5px;">` : ''}
         ${!isOwn && type === 'group' ? `<strong>${m.sender.name}</strong> ` : ''}
         ${m.content}
         ${m.media && m.media.length ? `<img src="${m.media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
         <span class="message-time">${timeStr}</span>
         ${isOwn ? `<span class="message-status">${m.readBy?.length > 1 ? '✓✓' : '✓'}</span>` : ''}
+        ${(isOwn || (type === 'group' && (currentGroup && (group?.admins?.includes(currentUser._id) || group?.owner?._id === currentUser._id)))) ? 
+          `<button class="delete-message" onclick="deleteMessage('${m._id}')"><i class="fas fa-trash"></i></button>` : ''}
       </div>
     `;
   }).join('');
   container.scrollTop = container.scrollHeight;
+}
+
+async function deleteMessage(messageId) {
+  showPopup('Delete this message?', 'confirm', async (confirmed) => {
+    if (confirmed) {
+      try {
+        await apiRequest(`/api/messages/${messageId}`, { method: 'DELETE' });
+        // Message will be removed via socket event
+      } catch (err) {
+        showPopup(err.message, 'error');
+      }
+    }
+  });
+}
+
+function handleMessageDeleted(data) {
+  const msgEl = document.querySelector(`.message[data-message-id="${data.messageId}"]`);
+  if (msgEl) msgEl.remove();
 }
 
 async function sendPrivateMessage() {
@@ -1273,7 +1329,11 @@ function handleIncomingGroupMessage(data) {
 }
 
 // Group settings
+let currentGroupObj = null;
+let groupDpBase64 = '';
+
 async function openGroupSettings(group) {
+  currentGroupObj = group;
   const modal = document.getElementById('group-settings-modal');
   const details = document.getElementById('group-details');
   const membersList = document.getElementById('group-members-list');
@@ -1284,6 +1344,9 @@ async function openGroupSettings(group) {
     <p><strong>Group:</strong> ${group.name}</p>
     <p><strong>Owner:</strong> ${group.owner.name}</p>
   `;
+
+  document.getElementById('group-name-edit').value = group.name;
+  document.getElementById('group-dp-preview').innerHTML = group.dp ? `<img src="${group.dp}" width="50">` : '';
 
   membersList.innerHTML = '<h4>Members</h4>';
   group.members.forEach(member => {
@@ -1309,7 +1372,6 @@ async function openGroupSettings(group) {
 
   modal.classList.add('active');
 
-  // Add event listeners for admin actions
   document.querySelectorAll('.promote-admin').forEach(btn => {
     btn.addEventListener('click', async () => {
       const userId = btn.dataset.userId;
@@ -1344,22 +1406,19 @@ async function openGroupSettings(group) {
   document.querySelectorAll('.remove-member').forEach(btn => {
     btn.addEventListener('click', async () => {
       const userId = btn.dataset.userId;
-      showPopup('Enter reason for removal:', 'confirm', async (confirmed) => {
-        if (confirmed) {
-          const reason = prompt('Reason:'); // Simple, can be improved with custom popup
-          try {
-            await apiRequest(`/api/groups/${group._id}/members/${userId}`, {
-              method: 'DELETE',
-              body: JSON.stringify({ reason })
-            });
-            showPopup('Member removed', 'success');
-            modal.classList.remove('active');
-            openGroup(group._id);
-          } catch (err) {
-            showPopup(err.message, 'error');
-          }
-        }
-      });
+      const reason = prompt('Enter reason for removal:');
+      if (reason === null) return;
+      try {
+        await apiRequest(`/api/groups/${group._id}/members/${userId}`, {
+          method: 'DELETE',
+          body: JSON.stringify({ reason })
+        });
+        showPopup('Member removed', 'success');
+        modal.classList.remove('active');
+        openGroup(group._id);
+      } catch (err) {
+        showPopup(err.message, 'error');
+      }
     });
   });
 
@@ -1379,15 +1438,54 @@ async function openGroupSettings(group) {
   });
 }
 
-async function generateInviteLink() {
-  if (!currentGroup) return;
+async function updateGroup() {
+  const name = document.getElementById('group-name-edit').value.trim();
+  const dp = groupDpBase64;
+  if (!name && !dp) return showPopup('No changes', 'warning');
   try {
-    const data = await apiRequest(`/api/groups/${currentGroup}/invite`, { method: 'POST' });
+    const updates = {};
+    if (name && name !== currentGroupObj.name) updates.name = name;
+    if (dp) updates.dp = dp;
+    await apiRequest(`/api/groups/${currentGroupObj._id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    });
+    showPopup('Group updated', 'success');
+    document.getElementById('group-settings-modal').classList.remove('active');
+    openGroup(currentGroupObj._id);
+  } catch (err) {
+    showPopup(err.message, 'error');
+  }
+}
+
+document.getElementById('group-dp')?.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      groupDpBase64 = reader.result;
+      document.getElementById('group-dp-preview').innerHTML = `<img src="${reader.result}" width="50">`;
+    };
+    reader.readAsDataURL(file);
+  }
+});
+
+async function generateInviteLink() {
+  if (!currentGroupObj) return;
+  try {
+    const data = await apiRequest(`/api/groups/${currentGroupObj._id}/invite`, { method: 'POST' });
     document.getElementById('invite-link').value = data.inviteLink;
     document.getElementById('invite-link-container').classList.remove('hidden');
   } catch (err) {
     showPopup(err.message, 'error');
   }
+}
+
+function copyInviteLink() {
+  const link = document.getElementById('invite-link');
+  link.select();
+  navigator.clipboard.writeText(link.value);
+  showPopup('Invite link copied!', 'success');
 }
 
 // ==================== Navigation Helpers ====================
@@ -1402,3 +1500,5 @@ function openProfile(userId) {
 
 // Make functions global for onclick attributes
 window.openProfile = openProfile;
+window.deleteMessage = deleteMessage;
+ 
