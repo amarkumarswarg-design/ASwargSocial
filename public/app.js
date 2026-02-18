@@ -3,9 +3,13 @@ const API_BASE = '';
 let socket = null;
 let currentUser = null;
 let currentChatUser = null;
+let currentGroup = null;
 let activeChatId = null;
+let activeGroupId = null;
 let cropper = null;
 let currentPostId = null;
+let currentStoryIndex = 0;
+let stories = [];
 
 // DOM Elements (cached after login)
 let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, headerLogout;
@@ -33,6 +37,20 @@ async function apiRequest(endpoint, options = {}) {
 function debounce(fn, delay) {
   let timer;
   return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
+}
+
+function formatTime(dateString) {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
 }
 
 // ==================== Initialization ====================
@@ -186,7 +204,8 @@ function initApp() {
   // Connect socket
   socket = io({ auth: { token: getToken() } });
   socket.on('connect', () => console.log('Socket connected'));
-  socket.on('private message', handleIncomingMessage);
+  socket.on('private message', handleIncomingPrivateMessage);
+  socket.on('group message', handleIncomingGroupMessage);
   socket.on('system notification', (data) => {
     alert(`🔊 ${data.from}: ${data.message}`);
   });
@@ -228,6 +247,48 @@ function initApp() {
       }
     });
   }
+
+  // Add contact modal
+  document.getElementById('save-contact').addEventListener('click', async () => {
+    const ssn = document.getElementById('contact-ssn').value.trim();
+    const nickname = document.getElementById('contact-nickname').value.trim();
+    if (!ssn) return alert('Enter SSN');
+    try {
+      await apiRequest('/api/contacts', {
+        method: 'POST',
+        body: JSON.stringify({ contactSsn: ssn, nickname })
+      });
+      document.getElementById('add-contact-modal').classList.remove('active');
+      document.getElementById('contact-ssn').value = '';
+      document.getElementById('contact-nickname').value = '';
+      alert('Contact added');
+      if (document.getElementById('chats-view')?.classList.contains('active')) {
+        loadView('chats');
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  // Create group modal
+  document.getElementById('create-group-btn').addEventListener('click', async () => {
+    const name = document.getElementById('group-name').value.trim();
+    if (!name) return alert('Enter group name');
+    const selected = document.querySelectorAll('#contact-select-list input:checked');
+    const members = Array.from(selected).map(cb => cb.value);
+    try {
+      await apiRequest('/api/groups', {
+        method: 'POST',
+        body: JSON.stringify({ name, members })
+      });
+      document.getElementById('create-group-modal').classList.remove('active');
+      document.getElementById('group-name').value = '';
+      alert('Group created');
+      loadView('chats');
+    } catch (err) {
+      alert(err.message);
+    }
+  });
 }
 
 // ==================== View Router ====================
@@ -242,8 +303,58 @@ async function loadView(view, param) {
 
 // ==================== Feed ====================
 async function renderFeed() {
-  contentArea.innerHTML = `<div id="feed-posts" class="view active"></div>`;
+  contentArea.innerHTML = `
+    <div class="view active" id="feed-view">
+      <div class="story-row" id="story-row"></div>
+      <div id="feed-posts"></div>
+    </div>
+  `;
+  await loadStories();
   await loadFeedPosts();
+}
+
+async function loadStories() {
+  try {
+    stories = await apiRequest('/api/stories/feed');
+    const container = document.getElementById('story-row');
+    container.innerHTML = `
+      <div class="story-item add-story" id="add-story-btn">
+        <div class="story-avatar">
+          <i class="fas fa-plus"></i>
+        </div>
+        <span class="story-name">Add</span>
+      </div>
+    ` + stories.map(s => `
+      <div class="story-item" data-story-id="${s._id}">
+        <div class="story-avatar">
+          <img src="${s.user.profilePic || 'https://via.placeholder.com/60'}" alt="">
+        </div>
+        <span class="story-name">${s.user.username}</span>
+      </div>
+    `).join('');
+
+    document.getElementById('add-story-btn').addEventListener('click', () => {
+      // Open story upload (simplified: just alert for now)
+      alert('Story upload not implemented in demo');
+    });
+
+    document.querySelectorAll('.story-item[data-story-id]').forEach(item => {
+      item.addEventListener('click', () => {
+        const id = item.dataset.storyId;
+        const story = stories.find(s => s._id === id);
+        if (story) showStory(story);
+      });
+    });
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function showStory(story) {
+  const modal = document.getElementById('story-viewer-modal');
+  document.getElementById('story-username').textContent = story.user.username;
+  document.getElementById('story-image-container').innerHTML = `<img src="${story.media.url}" alt="Story">`;
+  modal.classList.add('active');
 }
 
 async function loadFeedPosts() {
@@ -264,7 +375,7 @@ function renderPost(post) {
         <img src="${post.user.profilePic || 'https://via.placeholder.com/40'}" class="post-avatar">
         <div>
           <div class="post-user">${post.user.name} @${post.user.username}</div>
-          <div class="post-time">${new Date(post.createdAt).toLocaleString()}</div>
+          <div class="post-time">${formatTime(post.createdAt)}</div>
         </div>
       </div>
       <div class="post-content">${post.content || ''}</div>
@@ -312,7 +423,7 @@ async function loadCommentsModal(postId) {
         <img src="${c.user.profilePic || 'https://via.placeholder.com/30'}" class="comment-avatar">
         <div>
           <strong>@${c.user.username}</strong> ${c.text}
-          <div class="comment-time">${new Date(c.createdAt).toLocaleString()}</div>
+          <div class="comment-time">${formatTime(c.createdAt)}</div>
         </div>
         ${c.user._id === currentUser._id ? `<button class="delete-comment" data-comment-id="${c._id}"><i class="fas fa-trash"></i></button>` : ''}
       </div>
@@ -371,6 +482,7 @@ async function handleSearch() {
         </div>
         <button class="follow-btn btn-secondary" data-user-id="${u._id}">${u.isFollowing ? 'Unfollow' : 'Follow'}</button>
         <button class="chat-btn btn-primary" data-user-id="${u._id}"><i class="fas fa-comment"></i></button>
+        <button class="add-contact-btn btn-secondary" data-user-id="${u._id}"><i class="fas fa-user-plus"></i></button>
       </div>
     `).join('');
 
@@ -392,6 +504,15 @@ async function handleSearch() {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         await navigateToChat(btn.dataset.userId);
+      });
+    });
+
+    document.querySelectorAll('.add-contact-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const userId = btn.dataset.userId;
+        // For demo, just alert; could open contact modal prefilled
+        alert('Add contact feature: would need SSN. Use Contacts section.');
       });
     });
   } catch (err) { console.error(err); }
@@ -485,7 +606,7 @@ async function renderProfile(userId) {
           ${posts.map(p => renderPost(p)).join('')}
         </div>
         ${isOwn ? `
-        <div class="settings-card glass-card" style="margin-top:20px;">
+        <div class="settings-card glass-card">
           <h3>Account Settings</h3>
           <div class="setting-item">
             <label>Name</label>
@@ -635,11 +756,18 @@ async function deleteAccount() {
   } catch (err) { alert(err.message); }
 }
 
-// ==================== Chats ====================
+// ==================== Chats (Dual Pane) ====================
 async function renderChats() {
   contentArea.innerHTML = `
     <div class="view active" id="chats-view">
-      <div class="chats-list" id="chats-list"></div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+        <button class="btn-secondary" id="show-contacts"><i class="fas fa-address-book"></i> Contacts</button>
+        <button class="btn-secondary" id="show-groups"><i class="fas fa-users"></i> Groups</button>
+        <button class="btn-primary" id="new-group"><i class="fas fa-plus"></i> Group</button>
+      </div>
+      <div id="chats-list-container">
+        <div class="chats-list" id="chats-list"></div>
+      </div>
       <div class="chat-window hidden" id="chat-window">
         <div class="chat-header" id="chat-header"></div>
         <div class="chat-messages" id="chat-messages"></div>
@@ -650,6 +778,11 @@ async function renderChats() {
       </div>
     </div>
   `;
+
+  document.getElementById('show-contacts').addEventListener('click', loadContactsList);
+  document.getElementById('show-groups').addEventListener('click', loadGroupsList);
+  document.getElementById('new-group').addEventListener('click', openCreateGroupModal);
+
   await loadChatsList();
 }
 
@@ -658,25 +791,100 @@ async function loadChatsList() {
     const chats = await apiRequest('/api/chats');
     const list = document.getElementById('chats-list');
     list.innerHTML = chats.map(c => `
-      <div class="chat-item" data-chat-id="${c._id}" data-user-id="${c.otherUser._id}">
+      <div class="chat-item" data-chat-id="${c._id}" data-user-id="${c.otherUser._id}" data-type="chat">
         <img src="${c.otherUser.profilePic || 'https://via.placeholder.com/50'}">
         <div class="chat-info">
           <div class="chat-name">${c.otherUser.name}</div>
           <div class="chat-last">${c.lastMessage?.content || 'No messages'}</div>
         </div>
-        <div class="chat-time">${c.lastMessage ? new Date(c.lastMessage.createdAt).toLocaleTimeString() : ''}</div>
+        <div class="chat-time">${c.lastMessage ? formatTime(c.lastMessage.createdAt) : ''}</div>
       </div>
     `).join('');
-    document.querySelectorAll('.chat-item').forEach(item => {
-      item.addEventListener('click', () => openChat(item.dataset.userId, item.dataset.chatId));
+    attachChatItemListeners();
+  } catch (err) { console.error(err); }
+}
+
+async function loadGroupsList() {
+  try {
+    const groups = await apiRequest('/api/groups');
+    const list = document.getElementById('chats-list');
+    list.innerHTML = groups.map(g => `
+      <div class="chat-item" data-group-id="${g._id}" data-type="group">
+        <img src="${g.dp || 'https://via.placeholder.com/50'}">
+        <div class="chat-info">
+          <div class="chat-name">${g.name}</div>
+          <div class="chat-last">${g.lastMessage?.content || 'No messages'}</div>
+        </div>
+        <div class="chat-time">${g.lastMessage ? formatTime(g.lastMessage.createdAt) : ''}</div>
+      </div>
+    `).join('');
+    attachChatItemListeners();
+  } catch (err) { console.error(err); }
+}
+
+async function loadContactsList() {
+  try {
+    const contacts = await apiRequest('/api/contacts');
+    const list = document.getElementById('chats-list');
+    list.innerHTML = contacts.map(c => `
+      <div class="chat-item" data-user-id="${c.contact._id}" data-type="contact">
+        <img src="${c.contact.profilePic || 'https://via.placeholder.com/50'}">
+        <div class="chat-info">
+          <div class="chat-name">${c.nickname || c.contact.name}</div>
+          <div class="chat-last">@${c.contact.username}</div>
+        </div>
+        <button class="btn-secondary message-contact" data-user-id="${c.contact._id}">Message</button>
+      </div>
+    `).join('');
+    document.querySelectorAll('.message-contact').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigateToChat(btn.dataset.userId);
+      });
     });
   } catch (err) { console.error(err); }
 }
 
+function attachChatItemListeners() {
+  document.querySelectorAll('.chat-item[data-chat-id]').forEach(item => {
+    item.addEventListener('click', () => openChat(item.dataset.userId, item.dataset.chatId));
+  });
+  document.querySelectorAll('.chat-item[data-group-id]').forEach(item => {
+    item.addEventListener('click', () => openGroup(item.dataset.groupId));
+  });
+}
+
+function openCreateGroupModal() {
+  // Load contacts for selection
+  apiRequest('/api/contacts').then(contacts => {
+    const container = document.getElementById('contact-select-list');
+    container.innerHTML = contacts.map(c => `
+      <div>
+        <input type="checkbox" id="contact-${c.contact._id}" value="${c.contact._id}">
+        <label for="contact-${c.contact._id}">${c.nickname || c.contact.name}</label>
+      </div>
+    `).join('');
+    document.getElementById('create-group-modal').classList.add('active');
+  }).catch(err => alert(err.message));
+}
+
 async function openChat(otherUserId, chatId) {
   currentChatUser = otherUserId;
+  currentGroup = null;
   activeChatId = chatId;
-  document.getElementById('chats-list').classList.add('hidden');
+  activeGroupId = null;
+
+  document.getElementById('create-group-modal').classList.add('active');
+  }).catch(err => alert(err.message));
+}
+
+async function openChat(otherUserId, chatId) {
+  currentChatUser = otherUserId;
+  currentGroup = null;
+  activeChatId = chatId;
+  activeGroupId = null;
+
+  document.getElementById('chats-list-container').classList.add('hidden');
   document.getElementById('chat-window').classList.remove('hidden');
 
   if (!chatId) {
@@ -696,25 +904,52 @@ async function openChat(otherUserId, chatId) {
     document.getElementById('chat-messages').innerHTML = '';
   }
 
-  document.getElementById('send-chat').onclick = sendChatMessage;
+  document.getElementById('chat-header').innerHTML = `<strong>Chat</strong>`;
+  document.getElementById('send-chat').onclick = sendPrivateMessage;
   document.getElementById('chat-input').onkeypress = (e) => {
-    if (e.key === 'Enter') sendChatMessage();
+    if (e.key === 'Enter') sendPrivateMessage();
+  };
+}
+
+async function openGroup(groupId) {
+  currentGroup = groupId;
+  currentChatUser = null;
+  activeGroupId = groupId;
+  activeChatId = null;
+
+  document.getElementById('chats-list-container').classList.add('hidden');
+  document.getElementById('chat-window').classList.remove('hidden');
+
+  const msgs = await apiRequest(`/api/groups/${groupId}/messages`);
+  renderMessages(msgs);
+
+  socket.emit('join group', groupId);
+
+  const group = await apiRequest(`/api/groups/${groupId}`);
+  document.getElementById('chat-header').innerHTML = `<strong>${group.name}</strong>`;
+  document.getElementById('send-chat').onclick = sendGroupMessage;
+  document.getElementById('chat-input').onkeypress = (e) => {
+    if (e.key === 'Enter') sendGroupMessage();
   };
 }
 
 function renderMessages(messages) {
   const container = document.getElementById('chat-messages');
-  container.innerHTML = messages.map(m => `
-    <div class="message ${m.sender === currentUser._id ? 'own' : ''}">
-      ${m.content}
-      <span class="message-time">${new Date(m.createdAt).toLocaleTimeString()}</span>
-      ${m.sender === currentUser._id ? `<span class="message-status">${m.readBy?.length > 1 ? '✓✓' : '✓'}</span>` : ''}
-    </div>
-  `).join('');
+  container.innerHTML = messages.map(m => {
+    const isOwn = m.sender === currentUser._id;
+    return `
+      <div class="message ${isOwn ? 'own' : ''}">
+        ${!isOwn && m.senderName ? `<strong>${m.senderName}:</strong> ` : ''}
+        ${m.content}
+        <span class="message-time">${formatTime(m.createdAt)}</span>
+        ${isOwn ? `<span class="message-status">${m.readBy?.length > 1 ? '✓✓' : '✓'}</span>` : ''}
+      </div>
+    `;
+  }).join('');
   container.scrollTop = container.scrollHeight;
 }
 
-async function sendChatMessage() {
+async function sendPrivateMessage() {
   const text = document.getElementById('chat-input').value.trim();
   if (!text || !currentChatUser) return;
 
@@ -724,7 +959,7 @@ async function sendChatMessage() {
   container.innerHTML += `
     <div class="message own">
       ${text}
-      <span class="message-time">${new Date().toLocaleTimeString()}</span>
+      <span class="message-time">${formatTime(new Date())}</span>
       <span class="message-status">✓</span>
     </div>
   `;
@@ -732,13 +967,31 @@ async function sendChatMessage() {
   document.getElementById('chat-input').value = '';
 }
 
-function handleIncomingMessage(data) {
+async function sendGroupMessage() {
+  const text = document.getElementById('chat-input').value.trim();
+  if (!text || !currentGroup) return;
+
+  socket.emit('group message', { groupId: currentGroup, content: text });
+
+  const container = document.getElementById('chat-messages');
+  container.innerHTML += `
+    <div class="message own">
+      ${text}
+      <span class="message-time">${formatTime(new Date())}</span>
+      <span class="message-status">✓</span>
+    </div>
+  `;
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('chat-input').value = '';
+}
+
+function handleIncomingPrivateMessage(data) {
   if (currentChatUser && data.from === currentChatUser) {
     const container = document.getElementById('chat-messages');
     container.innerHTML += `
       <div class="message">
         ${data.content}
-        <span class="message-time">${new Date(data.createdAt).toLocaleTimeString()}</span>
+        <span class="message-time">${formatTime(data.createdAt)}</span>
       </div>
     `;
     container.scrollTop = container.scrollHeight;
@@ -749,10 +1002,28 @@ function handleIncomingMessage(data) {
   }
 }
 
+function handleIncomingGroupMessage(data) {
+  if (currentGroup && data.groupId === currentGroup) {
+    const container = document.getElementById('chat-messages');
+    container.innerHTML += `
+      <div class="message">
+        <strong>${data.fromName || 'User'}:</strong> ${data.content}
+        <span class="message-time">${formatTime(data.createdAt)}</span>
+      </div>
+    `;
+    container.scrollTop = container.scrollHeight;
+  } else {
+    if (document.getElementById('chats-view')?.classList.contains('active')) {
+      loadGroupsList();
+    }
+  }
+}
+
 // ==================== Navigation Helpers ====================
 async function navigateToChat(userId) {
   await loadView('chats');
-  openChat(userId, null);
+  // Need to ensure chats list is loaded before opening
+  setTimeout(() => openChat(userId, null), 300);
 }
 
 function openProfile(userId) {
