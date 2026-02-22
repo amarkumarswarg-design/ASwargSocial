@@ -8,7 +8,7 @@ const userSchema = new mongoose.Schema({
   ssn: { type: String, required: true, unique: true },
   profilePic: { type: String, default: '' },
   profilePicPublicId: { type: String, default: '' },
-  isBot: { type: Boolean, default: false },
+  isBroadcast: { type: Boolean, default: false }, // for the special "Swarg Social" account
   verified: { type: Boolean, default: false },
   ownerBadge: { type: Boolean, default: false },
   bio: { type: String, default: '' },
