@@ -416,6 +416,7 @@ body.chat-fullscreen .chat-window {
   align-items: center;
   margin-bottom: 10px;
   cursor: pointer;
+  flex-wrap: wrap;
 }
 .post-avatar {
   width: 40px; height: 40px;
@@ -423,7 +424,27 @@ body.chat-fullscreen .chat-window {
   object-fit: cover;
   border: 2px solid var(--primary);
 }
-.post-user { font-weight: 600; display: flex; align-items: center; gap: 5px; }
+.post-user { 
+  font-weight: 600; 
+  display: flex; 
+  align-items: center; 
+  gap: 5px; 
+  flex-wrap: wrap;
+}
+.follow-btn-small {
+  background: transparent;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  margin-left: 5px;
+}
+.follow-btn-small.following {
+  background: var(--primary);
+  color: white;
+}
 .post-time { font-size: 0.75rem; color: var(--text-secondary); margin-left: auto; }
 .post-content { margin: 10px 0; line-height: 1.5; }
 .post-media { width: 100%; border-radius: 16px; margin: 10px 0; max-height: 400px; object-fit: cover; }
@@ -658,6 +679,21 @@ body.chat-fullscreen .chat-window {
   border-bottom: 1px solid var(--border);
   margin-bottom: 10px;
 }
+body.chat-fullscreen .chat-header {
+  padding: 5px 10px;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(5px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+body.chat-fullscreen .chat-header img {
+  width: 30px;
+  height: 30px;
+}
+body.chat-fullscreen .chat-header strong {
+  font-size: 1rem;
+}
 .chat-header img {
   width: 40px; height: 40px;
   border-radius: 50%;
@@ -763,6 +799,30 @@ body.chat-fullscreen .chat-window {
 @keyframes slideUp {
   from { transform: translateY(20px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+.fullscreen-modal {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  margin: 0;
+}
+.fullscreen-modal .modal-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.fullscreen-modal textarea {
+  flex: 1;
+  min-height: 200px;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  color: var(--text);
+  font-size: 1rem;
+  resize: none;
 }
 .modal-header {
   display: flex;
@@ -1040,4 +1100,4 @@ body.chat-fullscreen .chat-window {
   .message img {
     max-width: 100px;
   }
-}
+  }
