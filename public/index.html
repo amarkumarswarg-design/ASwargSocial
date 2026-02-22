@@ -76,15 +76,20 @@
     <div id="main-container" class="main-container hidden">
       <header class="app-header glass-card">
         <h2 class="logo-small">Swarg</h2>
-        <button id="logout-btn" class="btn-icon"><i class="fas fa-sign-out-alt"></i></button>
+        <!-- Removed logout button from here -->
       </header>
 
       <div id="content-area" class="content-area"></div>
 
+      <!-- Floating Action Button for Create Post -->
+      <button id="fab-create" class="fab">
+        <i class="fas fa-plus"></i>
+      </button>
+
       <nav class="bottom-nav glass-card">
         <button class="nav-item active" data-view="feed"><i class="fas fa-home"></i><span>Feed</span></button>
         <button class="nav-item" data-view="search"><i class="fas fa-search"></i><span>Search</span></button>
-        <button class="nav-item" data-view="create"><i class="fas fa-plus-square"></i><span>Create</span></button>
+        <button class="nav-item" data-view="notifications"><i class="fas fa-bell"></i><span>Notifications</span></button>
         <button class="nav-item" data-view="chats"><i class="fas fa-comment"></i><span>Chats</span></button>
         <button class="nav-item" data-view="profile"><i class="fas fa-user"></i><span>Profile</span></button>
       </nav>
@@ -181,39 +186,65 @@
       </div>
     </div>
 
-    <!-- Edit Profile Modal -->
-    <div id="edit-profile-modal" class="modal">
+    <!-- Create Post Modal (new) -->
+    <div id="create-post-modal" class="modal">
       <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>Create Post</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <textarea id="post-content" placeholder="What's on your mind?" rows="4"></textarea>
+          <div class="media-preview" id="post-media-preview"></div>
+          <div class="create-post-actions">
+            <input type="file" id="post-media" accept="image/*" hidden>
+            <button class="btn-secondary" id="attach-media"><i class="fas fa-image"></i> Add Image</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="submit-post" class="btn-primary">Post</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Profile Modal (redesigned) -->
+    <div id="edit-profile-modal" class="modal">
+      <div class="modal-content glass-card edit-profile">
         <div class="modal-header">
           <h3>Edit Profile</h3>
           <button class="close-modal"><i class="fas fa-times"></i></button>
         </div>
         <div class="modal-body">
-          <div class="setting-item">
-            <label>Name</label>
-            <input type="text" id="edit-name" placeholder="Name">
+          <div class="profile-pic-edit">
+            <img id="edit-profile-pic" src="" alt="Profile">
+            <input type="file" id="edit-dp" accept="image/*" hidden>
+            <button class="btn-secondary" id="change-pic-btn">Change Photo</button>
           </div>
-          <div class="setting-item">
+          <div class="form-group">
+            <label>Name</label>
+            <input type="text" id="edit-name" placeholder="Your name">
+          </div>
+          <div class="form-group">
             <label>Username</label>
             <input type="text" id="edit-username" placeholder="Username">
           </div>
-          <div class="setting-item">
+          <div class="form-group">
             <label>Bio</label>
-            <textarea id="edit-bio" placeholder="Tell something about yourself" rows="2"></textarea>
+            <textarea id="edit-bio" placeholder="Tell something about yourself" rows="3"></textarea>
           </div>
-          <div class="setting-item">
+          <div class="form-group">
             <label>Work</label>
             <input type="text" id="edit-work" placeholder="Where do you work?">
           </div>
-          <div class="setting-item">
+          <div class="form-group">
             <label>Education</label>
             <input type="text" id="edit-education" placeholder="Where did you study?">
           </div>
-          <div class="setting-item">
+          <div class="form-group">
             <label>Location</label>
             <input type="text" id="edit-location" placeholder="Where do you live?">
           </div>
-          <div class="setting-item">
+          <div class="form-group">
             <label>Relationship</label>
             <select id="edit-relationship">
               <option value="">Select</option>
@@ -224,14 +255,9 @@
               <option value="It's complicated">It's complicated</option>
             </select>
           </div>
-          <div class="setting-item">
-            <label>Profile Picture</label>
-            <input type="file" id="edit-dp" accept="image/*">
-            <div id="edit-dp-preview" class="preview-small"></div>
-          </div>
           <hr>
-          <div class="danger-zone">
-            <h4>Change Password</h4>
+          <div class="form-group">
+            <label>Change Password</label>
             <input type="password" id="edit-password" placeholder="New password (leave blank to keep current)">
           </div>
           <hr>
@@ -281,6 +307,41 @@
       </div>
     </div>
 
+    <!-- Notifications Modal (new) -->
+    <div id="notifications-modal" class="modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>Notifications</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body" id="notifications-list"></div>
+      </div>
+    </div>
+
+    <!-- Settings Modal (new) -->
+    <div id="settings-modal" class="modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>Settings</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <div class="setting-item" onclick="document.getElementById('edit-profile-modal').classList.add('active'); document.getElementById('settings-modal').classList.remove('active');">
+            <i class="fas fa-user"></i> Edit Profile
+          </div>
+          <div class="setting-item" onclick="logout()">
+            <i class="fas fa-sign-out-alt"></i> Logout
+          </div>
+          <hr>
+          <div class="setting-item">
+            <i class="fas fa-info-circle"></i> About
+          </div>
+          <p class="creator-credit">Creator: Amar Kumar</p>
+          <p>Version 3.0</p>
+        </div>
+      </div>
+    </div>
+
     <!-- Custom Popup Modal -->
     <div id="popup-modal" class="modal">
       <div class="modal-content glass-card popup-content">
@@ -303,4 +364,4 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
   <script src="/app.js"></script>
 </body>
-              </html>
+          </html>
