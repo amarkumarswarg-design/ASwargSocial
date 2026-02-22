@@ -305,13 +305,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
+  // Global click listener for delete account button (ensures it works even if modal is dynamic)
+  document.addEventListener('click', (e) => {
+    if (e.target.id === 'delete-account-btn') {
+      deleteAccount();
+    }
+  });
+
   // Edit profile modal save
   document.getElementById('save-profile')?.addEventListener('click', saveProfile);
   document.getElementById('change-pic-btn')?.addEventListener('click', () => {
     document.getElementById('edit-dp').click();
   });
   document.getElementById('edit-dp')?.addEventListener('change', handleEditDp);
-  document.getElementById('delete-account-btn')?.addEventListener('click', deleteAccount);
 
   // Group settings
   document.getElementById('generate-invite')?.addEventListener('click', generateInviteLink);
@@ -368,6 +374,61 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Group creation: member search
   document.getElementById('member-search')?.addEventListener('input', debounce(searchMembers, 500));
   window.selectedMembers = [];
+
+  document.getElementById('group-dp-create')?.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        window.groupDpBase64 = reader.result;
+        document.getElementById('group-dp-create-preview').innerHTML = `<img src="${reader.result}" style="max-width:100px; border-radius:10px;">`;
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+
+  document.getElementById('create-group-btn').addEventListener('click', async () => {
+    const name = document.getElementById('group-name').value.trim();
+    const dpBase64 = window.groupDpBase64;
+    const members = window.selectedMembers || [];
+    if (!name) return showPopup('Enter group name', 'warning');
+    try {
+      await apiRequest('/api/groups', {
+        method: 'POST',
+        body: JSON.stringify({ name, dp: dpBase64, members })
+      });
+      document.getElementById('create-group-modal').classList.remove('active');
+      document.getElementById('group-name').value = '';
+      document.getElementById('group-dp-create-preview').innerHTML = '';
+      window.groupDpBase64 = null;
+      window.selectedMembers = [];
+      showPopup('Group created', 'success');
+      loadView('chats');
+    } catch (err) {
+      showPopup(err.message, 'error');
+    }
+  });
+
+  document.getElementById('save-contact').addEventListener('click', async () => {
+    const identifier = document.getElementById('contact-identifier').value.trim();
+    const nickname = document.getElementById('contact-nickname').value.trim();
+    if (!identifier) return showPopup('Enter username or SSN', 'warning');
+    try {
+      await apiRequest('/api/contacts', {
+        method: 'POST',
+        body: JSON.stringify({ identifier, nickname })
+      });
+      document.getElementById('add-contact-modal').classList.remove('active');
+      document.getElementById('contact-identifier').value = '';
+      document.getElementById('contact-nickname').value = '';
+      showPopup('Contact added', 'success');
+      if (document.getElementById('chats-view')?.classList.contains('active')) {
+        loadView('chats');
+      }
+    } catch (err) {
+      showPopup(err.message, 'error');
+    }
+  });
 });
 
 function showAuth() {
@@ -401,67 +462,11 @@ function initApp() {
 
   loadView('feed');
   pushHistory('feed');
-
-  document.getElementById('save-contact').addEventListener('click', async () => {
-    const identifier = document.getElementById('contact-identifier').value.trim();
-    const nickname = document.getElementById('contact-nickname').value.trim();
-    if (!identifier) return showPopup('Enter username or SSN', 'warning');
-    try {
-      await apiRequest('/api/contacts', {
-        method: 'POST',
-        body: JSON.stringify({ identifier, nickname })
-      });
-      document.getElementById('add-contact-modal').classList.remove('active');
-      document.getElementById('contact-identifier').value = '';
-      document.getElementById('contact-nickname').value = '';
-      showPopup('Contact added', 'success');
-      if (document.getElementById('chats-view')?.classList.contains('active')) {
-        loadView('chats');
-      }
-    } catch (err) {
-      showPopup(err.message, 'error');
-    }
-  });
-
-  document.getElementById('create-group-btn').addEventListener('click', async () => {
-    const name = document.getElementById('group-name').value.trim();
-    const dpBase64 = window.groupDpBase64;
-    const members = window.selectedMembers || [];
-    if (!name) return showPopup('Enter group name', 'warning');
-    try {
-      await apiRequest('/api/groups', {
-        method: 'POST',
-        body: JSON.stringify({ name, dp: dpBase64, members })
-      });
-      document.getElementById('create-group-modal').classList.remove('active');
-      document.getElementById('group-name').value = '';
-      document.getElementById('group-dp-create-preview').innerHTML = '';
-      window.groupDpBase64 = null;
-      window.selectedMembers = [];
-      showPopup('Group created', 'success');
-      loadView('chats');
-    } catch (err) {
-      showPopup(err.message, 'error');
-    }
-  });
-
-  document.getElementById('group-dp-create')?.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        window.groupDpBase64 = reader.result;
-        document.getElementById('group-dp-create-preview').innerHTML = `<img src="${reader.result}" style="max-width:100px; border-radius:10px;">`;
-      };
-      reader.readAsDataURL(file);
-    }
-  });
 }
 
 async function loadView(view, param, addToHistory = true) {
   contentArea.innerHTML = '';
   unsavedChanges = false;
-  // Remove full-screen class if any
   document.body.classList.remove('chat-fullscreen');
   if (view === 'feed') {
     await renderFeed();
@@ -477,6 +482,9 @@ async function loadView(view, param, addToHistory = true) {
     fabCreate.classList.add('hidden');
   } else if (view === 'profile') {
     await renderProfile(param || currentUser._id);
+    fabCreate.classList.add('hidden');
+  } else if (view === 'group-info') {
+    await renderGroupInfo(param);
     fabCreate.classList.add('hidden');
   }
   if (addToHistory) pushHistory(view, param);
@@ -617,10 +625,11 @@ function renderPost(post) {
             ${post.user.name}
             ${post.user.verified ? '<span class="verified-badge">✓</span>' : ''}
             ${post.user.ownerBadge ? '<span class="owner-badge">👑</span>' : ''}
+            ${!isOwn ? `<button class="follow-btn-small ${post.user.isFollowing ? 'following' : ''}" data-user-id="${post.user._id}" onclick="event.stopPropagation(); toggleFollowFromPost('${post.user._id}', this)">${post.user.isFollowing ? 'Unfollow' : 'Follow'}</button>` : ''}
           </div>
           <div class="post-time">${formatTime(post.createdAt)}</div>
         </div>
-        ${isOwn ? `<button class="delete-post-btn" data-post-id="${post._id}"><i class="fas fa-trash"></i></button>` : ''}
+        ${isOwn ? `<button class="delete-post-btn" data-post-id="${post._id}" onclick="event.stopPropagation()"><i class="fas fa-trash"></i></button>` : ''}
       </div>
       <div class="post-content">${post.content || ''}</div>
       ${post.media.map(m => m.type === 'image' ? `<img src="${m.url}" class="post-media">` : '').join('')}
@@ -634,6 +643,21 @@ function renderPost(post) {
       </div>
     </div>
   `;
+}
+
+async function toggleFollowFromPost(userId, btn) {
+  const isFollowing = btn.textContent.trim() === 'Unfollow';
+  try {
+    if (isFollowing) {
+      await apiRequest(`/api/follow/${userId}`, { method: 'DELETE' });
+      btn.textContent = 'Follow';
+      btn.classList.remove('following');
+    } else {
+      await apiRequest(`/api/follow/${userId}`, { method: 'POST' });
+      btn.textContent = 'Unfollow';
+      btn.classList.add('following');
+    }
+  } catch (err) { showPopup(err.message, 'error'); }
 }
 
 function attachPostListeners() {
@@ -871,6 +895,23 @@ async function renderProfile(userId) {
       suggestions = await apiRequest('/api/users/suggestions');
     }
 
+    // If this is Amar's profile and we want to show the broadcast account
+    let broadcastHtml = '';
+    if (isOwn && currentUser.username === 'amar') {
+      try {
+        const broadcast = await apiRequest('/api/users/swarg');
+        broadcastHtml = `
+          <div class="broadcast-card glass-card" style="margin-top:20px; padding:15px; display:flex; align-items:center; gap:15px; cursor:pointer;" onclick="navigateToChat('${broadcast._id}')">
+            ${broadcast.profilePic ? `<img src="${broadcast.profilePic}" style="width:50px;height:50px;border-radius:50%;">` : `<div class="default-avatar" style="width:50px;height:50px;">S</div>`}
+            <div>
+              <h4>${broadcast.name} ${broadcast.verified ? '<span class="verified-badge">✓</span>' : ''}</h4>
+              <p>Broadcast channel – only you can message</p>
+            </div>
+          </div>
+        `;
+      } catch (e) {}
+    }
+
     const profileHtml = `
       <div class="view active" id="profile-view">
         <div class="profile-header glass-card">
@@ -878,8 +919,8 @@ async function renderProfile(userId) {
             ${user.profilePic 
               ? `<img src="${user.profilePic}" class="profile-avatar">` 
               : `<div class="default-avatar profile-avatar" style="width:80px;height:80px;">${user.name.charAt(0).toUpperCase()}</div>`}
-            ${isOwn ? `<i class="fas fa-cog settings-icon" onclick="document.getElementById('settings-modal').classList.add('active')"></i>` : ''}
           </div>
+          ${isOwn ? `<i class="fas fa-cog settings-icon" onclick="document.getElementById('settings-modal').classList.add('active')"></i>` : ''}
           <div>
             <h3>
               ${user.name}
@@ -916,6 +957,8 @@ async function renderProfile(userId) {
           ${user.relationship ? `<div class="detail-item"><i class="fas fa-heart"></i> ${user.relationship}</div>` : ''}
         </div>
         ` : ''}
+
+        ${broadcastHtml}
 
         <div id="profile-posts" class="profile-posts">
           ${posts.map(p => renderPost(p)).join('')}
@@ -1356,12 +1399,11 @@ async function openGroup(groupId, addToHistory = true) {
       ? `<img src="${group.dp}" style="width:40px;height:40px;border-radius:50%;">` 
       : `<div class="default-avatar" style="width:40px;height:40px;">${group.name.charAt(0).toUpperCase()}</div>`}
     <div>
-      <strong id="group-name-header">${group.name}</strong>
+      <strong id="group-name-header" style="cursor:pointer;">${group.name}</strong>
       ${group.admins?.includes(currentUser._id) ? ' (Admin)' : ''}
     </div>
   `;
-  document.getElementById('group-name-header').style.cursor = 'pointer';
-  document.getElementById('group-name-header').onclick = () => openGroupInfo(group);
+  document.getElementById('group-name-header').onclick = () => loadView('group-info', groupId);
   document.getElementById('send-chat').onclick = sendGroupMessage;
   document.getElementById('chat-input').onkeypress = (e) => {
     if (e.key === 'Enter') sendGroupMessage();
@@ -1503,49 +1545,75 @@ function handleIncomingGroupMessage(data) {
   }
 }
 
-// Group info modal
-function openGroupInfo(group) {
-  const modal = document.getElementById('group-info-modal');
-  document.getElementById('group-info-name').textContent = group.name;
-  document.getElementById('group-info-dp').src = group.dp || '';
-  document.getElementById('group-info-owner').textContent = group.owner.name;
-  document.getElementById('group-info-member-count').textContent = group.members.length;
-  let membersHtml = '<h4>Members</h4>';
-  group.members.forEach(m => {
-    membersHtml += `<div>${m.name} ${group.admins.includes(m._id) ? '(Admin)' : ''}</div>`;
-  });
-  document.getElementById('group-info-members').innerHTML = membersHtml;
-  const isAdmin = group.admins.includes(currentUser._id);
-  const isOwner = group.owner._id === currentUser._id;
-  const actionsDiv = document.getElementById('group-admin-actions');
-  if (isAdmin || isOwner) {
-    actionsDiv.classList.remove('hidden');
-    document.getElementById('group-edit-btn').onclick = () => {
-      modal.classList.remove('active');
-      openGroupSettings(group);
-    };
-    document.getElementById('group-delete-btn').onclick = async () => {
-      if (!isOwner) return showPopup('Only owner can delete group', 'warning');
-      showPopup('Delete this group permanently?', 'confirm', async (confirmed) => {
-        if (confirmed) {
-          try {
-            await apiRequest(`/api/groups/${group._id}`, { method: 'DELETE' });
-            showPopup('Group deleted', 'success');
-            modal.classList.remove('active');
-            loadView('chats');
-          } catch (err) {
-            showPopup(err.message, 'error');
-          }
-        }
-      });
-    };
-  } else {
-    actionsDiv.classList.add('hidden');
+// Group info full page
+async function renderGroupInfo(groupId) {
+  try {
+    const group = await apiRequest(`/api/groups/${groupId}`);
+    const isAdmin = group.admins.includes(currentUser._id);
+    const isOwner = group.owner._id === currentUser._id;
+
+    let membersHtml = '<h4>Members</h4>';
+    group.members.forEach(member => {
+      const memberIsAdmin = group.admins.includes(member._id);
+      membersHtml += `
+        <div class="user-item" onclick="openProfile('${member._id}')">
+          ${member.profilePic ? `<img src="${member.profilePic}" width="40">` : `<div class="default-avatar" style="width:40px;height:40px;">${member.name.charAt(0).toUpperCase()}</div>`}
+          <div class="user-info">
+            <h4>${member.name} ${memberIsAdmin ? '(Admin)' : ''}</h4>
+            <p>@${member.username}</p>
+          </div>
+        </div>
+      `;
+    });
+
+    const html = `
+      <div class="view active" id="group-info-view">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
+          <button class="btn-icon" onclick="loadView('chats')"><i class="fas fa-arrow-left"></i></button>
+          <h3>Group Info</h3>
+        </div>
+        <div class="glass-card" style="padding:20px; display:flex; align-items:center; gap:15px;">
+          ${group.dp ? `<img src="${group.dp}" style="width:60px;height:60px;border-radius:50%;">` : `<div class="default-avatar" style="width:60px;height:60px;">${group.name.charAt(0).toUpperCase()}</div>`}
+          <div>
+            <h2>${group.name}</h2>
+            <p>Owner: ${group.owner.name}</p>
+            <p>${group.members.length} members</p>
+          </div>
+        </div>
+        <div class="glass-card" style="margin-top:20px; padding:15px;">
+          ${membersHtml}
+        </div>
+        ${isAdmin ? `
+          <div style="margin-top:20px; display:flex; gap:10px;">
+            <button class="btn-primary" onclick="openGroupSettings(${JSON.stringify(group).replace(/"/g, '&quot;')})">Edit Group</button>
+          </div>
+        ` : ''}
+        ${isOwner ? `
+          <button class="btn-danger" style="margin-top:10px;" onclick="deleteGroup('${group._id}')">Delete Group</button>
+        ` : ''}
+      </div>
+    `;
+    contentArea.innerHTML = html;
+  } catch (err) {
+    showPopup(err.message, 'error');
   }
-  modal.classList.add('active');
 }
 
-// Group settings
+async function deleteGroup(groupId) {
+  showPopup('Delete this group permanently?', 'confirm', async (confirmed) => {
+    if (confirmed) {
+      try {
+        await apiRequest(`/api/groups/${groupId}`, { method: 'DELETE' });
+        showPopup('Group deleted', 'success');
+        loadView('chats');
+      } catch (err) {
+        showPopup(err.message, 'error');
+      }
+    }
+  });
+}
+
+// Group settings (modal) – already exists
 let currentGroupObj = null;
 let groupDpBase64 = '';
 
@@ -1713,8 +1781,8 @@ async function searchMembers() {
     const users = await apiRequest(`/api/users/search?q=${encodeURIComponent(query)}`);
     const resultsDiv = document.getElementById('member-search-results');
     resultsDiv.innerHTML = users.map(u => `
-      <div class="member-result-item" data-user-id="${u._id}" data-name="${u.name}">
-        ${u.profilePic ? `<img src="${u.profilePic}" width="30">` : `<div class="default-avatar" style="width:30px;height:30px;">${u.name.charAt(0).toUpperCase()}</div>`}
+      <div class="member-result-item" data-user-id="${u._id}" data-name="${u.name}" style="display:flex; align-items:center; gap:10px; padding:5px; cursor:pointer;">
+        ${u.profilePic ? `<img src="${u.profilePic}" width="30" style="border-radius:50%;">` : `<div class="default-avatar" style="width:30px;height:30px;">${u.name.charAt(0).toUpperCase()}</div>`}
         <span>${u.name} (@${u.username})</span>
       </div>
     `).join('');
@@ -1736,11 +1804,12 @@ async function searchMembers() {
 
 function updateSelectedMembers() {
   const container = document.getElementById('selected-members');
-  container.innerHTML = window.selectedMembers.map(id => `
-    <span class="selected-member-tag" data-user-id="${id}">
-      ${id} <i class="fas fa-times" onclick="removeSelectedMember('${id}')"></i>
-    </span>
-  `).join('');
+  container.innerHTML = (window.selectedMembers || []).map(id => {
+    // We don't have names here, just ID; could store a map, but for simplicity show ID
+    return `<span class="selected-member-tag" data-user-id="${id}">
+      ${id.substring(0,4)} <i class="fas fa-times" onclick="removeSelectedMember('${id}')"></i>
+    </span>`;
+  }).join('');
 }
 
 window.removeSelectedMember = (userId) => {
@@ -1762,3 +1831,5 @@ function openProfile(userId) {
 window.openProfile = openProfile;
 window.deleteMessage = deleteMessage;
 window.openEditProfileModal = openEditProfileModal;
+window.openGroupSettings = openGroupSettings;
+           
