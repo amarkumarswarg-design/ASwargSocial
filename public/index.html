@@ -76,12 +76,12 @@
     <div id="main-container" class="main-container hidden">
       <header class="app-header glass-card">
         <h2 class="logo-small">Swarg</h2>
-        <!-- Removed logout button from here -->
+        <!-- Removed logout button -->
       </header>
 
       <div id="content-area" class="content-area"></div>
 
-      <!-- Floating Action Button for Create Post -->
+      <!-- Floating Action Button for Create Post (only visible on feed) -->
       <button id="fab-create" class="fab">
         <i class="fas fa-plus"></i>
       </button>
@@ -171,6 +171,24 @@
       </div>
     </div>
 
+    <!-- New Group/Contact Modal (triggered by + in chats) -->
+    <div id="new-chat-modal" class="modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>New Chat</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <div class="new-chat-option" onclick="openCreateGroup()">
+            <i class="fas fa-users"></i> New Group
+          </div>
+          <div class="new-chat-option" onclick="openAddContact()">
+            <i class="fas fa-user-plus"></i> New Contact
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="create-group-modal" class="modal">
       <div class="modal-content glass-card">
         <div class="modal-header">
@@ -186,7 +204,7 @@
       </div>
     </div>
 
-    <!-- Create Post Modal (new) -->
+    <!-- Create Post Modal -->
     <div id="create-post-modal" class="modal">
       <div class="modal-content glass-card">
         <div class="modal-header">
@@ -307,7 +325,7 @@
       </div>
     </div>
 
-    <!-- Notifications Modal (new) -->
+    <!-- Notifications Modal -->
     <div id="notifications-modal" class="modal">
       <div class="modal-content glass-card">
         <div class="modal-header">
@@ -318,7 +336,7 @@
       </div>
     </div>
 
-    <!-- Settings Modal (new) -->
+    <!-- Settings Modal -->
     <div id="settings-modal" class="modal">
       <div class="modal-content glass-card">
         <div class="modal-header">
@@ -333,11 +351,26 @@
             <i class="fas fa-sign-out-alt"></i> Logout
           </div>
           <hr>
-          <div class="setting-item">
+          <div class="setting-item" onclick="showAbout()">
             <i class="fas fa-info-circle"></i> About
           </div>
           <p class="creator-credit">Creator: Amar Kumar</p>
           <p>Version 3.0</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- About Modal -->
+    <div id="about-modal" class="modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3>About Swarg Social</h3>
+          <button class="close-modal"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <p>Swarg Social is a premium social platform created by Amar Kumar.</p>
+          <p>Version 3.0</p>
+          <p>All rights reserved.</p>
         </div>
       </div>
     </div>
@@ -364,4 +397,4 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
   <script src="/app.js"></script>
 </body>
-          </html>
+        </html>
