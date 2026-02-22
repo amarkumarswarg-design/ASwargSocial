@@ -10,9 +10,10 @@ let cropper = null;
 let currentPostId = null;
 let stories = [];
 let unsavedChanges = false;
+let historyStack = [];
 
 // DOM Elements (cached after login)
-let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, headerLogout, fabCreate;
+let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, fabCreate;
 
 // ==================== Helper Functions ====================
 function showLoading() { loadingEl?.classList.remove('hidden'); }
@@ -68,6 +69,16 @@ function formatDateHeader(dateString) {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+// Default avatar generator
+function getAvatarHtml(user, size = 40) {
+  if (user.profilePic) {
+    return `<img src="${user.profilePic}" class="avatar" style="width:${size}px; height:${size}px;">`;
+  } else {
+    const initial = user.name ? user.name.charAt(0).toUpperCase() : '?';
+    return `<div class="default-avatar" style="width:${size}px; height:${size}px; background: var(--primary); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">${initial}</div>`;
+  }
+}
+
 // ==================== Custom Popup ====================
 function showPopup(message, type = 'info', callback = null) {
   const modal = document.getElementById('popup-modal');
@@ -118,6 +129,32 @@ window.addEventListener('beforeunload', (e) => {
   }
 });
 
+// ==================== Back Button Handling ====================
+window.addEventListener('popstate', (event) => {
+  if (historyStack.length > 1) {
+    historyStack.pop();
+    const prevState = historyStack[historyStack.length - 1];
+    if (prevState.view === 'chat' && prevState.chatId) {
+      openChat(prevState.userId, prevState.chatId, false);
+    } else if (prevState.view === 'group' && prevState.groupId) {
+      openGroup(prevState.groupId, false);
+    } else {
+      loadView(prevState.view, prevState.param, false);
+    }
+  } else {
+    // If at root, maybe exit app? For web, we can show a popup
+    showPopup('Press back again to exit', 'info');
+    // Push a dummy state to allow second back to exit
+    history.pushState({ view: 'dummy' }, '');
+  }
+});
+
+function pushHistory(view, param, chatId, groupId) {
+  const state = { view, param, chatId, groupId };
+  historyStack.push(state);
+  history.pushState(state, '');
+}
+
 // ==================== Initialization ====================
 document.addEventListener('DOMContentLoaded', async () => {
   loadingEl = document.getElementById('loading');
@@ -125,7 +162,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   mainContainer = document.getElementById('main-container');
   contentArea = document.getElementById('content-area');
   bottomNavItems = document.querySelectorAll('.nav-item');
-  headerLogout = document.getElementById('logout-btn');
   fabCreate = document.getElementById('fab-create');
 
   if (getToken()) {
@@ -246,10 +282,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     showPopup('SSN copied to clipboard!', 'success');
   });
 
-  // Logout via settings modal
   window.logout = () => {
     setToken(null);
     window.location.reload();
+  };
+
+  window.showAbout = () => {
+    document.getElementById('about-modal').classList.add('active');
+  };
+
+  window.openCreateGroup = () => {
+    document.getElementById('new-chat-modal').classList.remove('active');
+    document.getElementById('create-group-modal').classList.add('active');
+    loadContactsForGroup();
+  };
+
+  window.openAddContact = () => {
+    document.getElementById('new-chat-modal').classList.remove('active');
+    document.getElementById('add-contact-modal').classList.add('active');
   };
 
   document.querySelectorAll('.close-modal').forEach(btn => {
@@ -317,11 +367,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       btn.disabled = false;
     }
   });
-
-  // Settings button on profile
-  document.getElementById('settings-btn')?.addEventListener('click', () => {
-    document.getElementById('settings-modal').classList.add('active');
-  });
 });
 
 function showAuth() {
@@ -336,6 +381,7 @@ function initApp() {
   socket.on('private message', handleIncomingPrivateMessage);
   socket.on('group message', handleIncomingGroupMessage);
   socket.on('message deleted', handleMessageDeleted);
+  socket.on('message read', handleMessageRead);
   socket.on('new notification', handleNewNotification);
   socket.on('system notification', (data) => {
     showPopup(`🔊 ${data.from}: ${data.message}`, 'info');
@@ -345,11 +391,16 @@ function initApp() {
     item.addEventListener('click', () => {
       bottomNavItems.forEach(i => i.classList.remove('active'));
       item.classList.add('active');
-      loadView(item.dataset.view);
+      const view = item.dataset.view;
+      loadView(view);
+      // Hide FAB on non-feed views
+      if (view === 'feed') fabCreate.classList.remove('hidden');
+      else fabCreate.classList.add('hidden');
     });
   });
 
   loadView('feed');
+  pushHistory('feed');
 
   if (currentUser?.isBot) {
     const header = document.querySelector('.app-header');
@@ -417,14 +468,26 @@ function initApp() {
   });
 }
 
-async function loadView(view, param) {
+async function loadView(view, param, addToHistory = true) {
   contentArea.innerHTML = '';
   unsavedChanges = false;
-  if (view === 'feed') await renderFeed();
-  else if (view === 'search') renderSearch();
-  else if (view === 'notifications') await renderNotifications();
-  else if (view === 'chats') await renderChats();
-  else if (view === 'profile') await renderProfile(param || currentUser._id);
+  if (view === 'feed') {
+    await renderFeed();
+    fabCreate.classList.remove('hidden');
+  } else if (view === 'search') {
+    renderSearch();
+    fabCreate.classList.add('hidden');
+  } else if (view === 'notifications') {
+    await renderNotifications();
+    fabCreate.classList.add('hidden');
+  } else if (view === 'chats') {
+    await renderChats();
+    fabCreate.classList.add('hidden');
+  } else if (view === 'profile') {
+    await renderProfile(param || currentUser._id);
+    fabCreate.classList.add('hidden');
+  }
+  if (addToHistory) pushHistory(view, param);
 }
 
 // ==================== Feed ====================
@@ -453,7 +516,7 @@ async function loadStories() {
     ` + storiesData.map(s => `
       <div class="story-item" data-story-id="${s._id}">
         <div class="story-avatar">
-          <img src="${s.user.profilePic || 'https://via.placeholder.com/60'}" alt="">
+          <img src="${s.user.profilePic || ''}" onerror="this.style.display='none'; this.parentNode.innerHTML='<div class=\\'default-avatar\\' style=\\'width:60px;height:60px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold;\\'>${s.user.name.charAt(0).toUpperCase()}</div>';">
         </div>
         <span class="story-name">${s.user.username}</span>
       </div>
@@ -550,11 +613,14 @@ function renderPost(post) {
   const liked = post.likes.includes(currentUser._id);
   const isOwn = post.user._id === currentUser._id;
   return `
-    <div class="post-header" onclick="openProfile('${post.user._id}')">
-        <img src="${post.user.profilePic || 'https://via.placeholder.com/40'}" class="post-avatar">
+    <div class="post-card" data-post-id="${post._id}">
+      <div class="post-header" onclick="openProfile('${post.user._id}')">
+        ${post.user.profilePic 
+          ? `<img src="${post.user.profilePic}" class="post-avatar">` 
+          : `<div class="default-avatar post-avatar" style="background:var(--primary);">${post.user.name.charAt(0).toUpperCase()}</div>`}
         <div>
           <div class="post-user">
-            ${post.user.name} @${post.user.username}
+            ${post.user.name}
             ${post.user.verified ? '<span class="verified-badge">✓</span>' : ''}
             ${post.user.ownerBadge ? '<span class="owner-badge">👑</span>' : ''}
           </div>
@@ -622,7 +688,9 @@ async function loadCommentsModal(postId) {
     const list = document.getElementById('comments-list');
     list.innerHTML = post.comments.map(c => `
       <div class="comment-item">
-        <img src="${c.user.profilePic || 'https://via.placeholder.com/30'}" class="comment-avatar">
+        ${c.user.profilePic 
+          ? `<img src="${c.user.profilePic}" class="comment-avatar" style="width:30px;height:30px;border-radius:50%;">` 
+          : `<div class="default-avatar" style="width:30px;height:30px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${c.user.name.charAt(0).toUpperCase()}</div>`}
         <div>
           <strong>@${c.user.username}</strong> ${c.text}
           <div class="comment-time">${formatTime(c.createdAt)}</div>
@@ -683,10 +751,12 @@ function displayUsers(users) {
   const resultsDiv = document.getElementById('search-results');
   resultsDiv.innerHTML = users.map(u => `
     <div class="user-item" data-user-id="${u._id}">
-      <img src="${u.profilePic || 'https://via.placeholder.com/50'}">
+      ${u.profilePic 
+        ? `<img src="${u.profilePic}">` 
+        : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${u.name.charAt(0).toUpperCase()}</div>`}
       <div class="user-info">
         <h4>
-          ${u.name} @${u.username}
+          ${u.name}
           ${u.verified ? '<span class="verified-badge">✓</span>' : ''}
           ${u.ownerBadge ? '<span class="owner-badge">👑</span>' : ''}
         </h4>
@@ -751,20 +821,20 @@ async function loadNotifications() {
     }
     container.innerHTML = notifications.map(n => `
       <div class="notification-item ${n.read ? '' : 'unread'}" data-notification-id="${n._id}" data-type="${n.type}" data-from="${n.from?._id}" data-post="${n.post?._id}" data-group="${n.group?._id}">
-        <img src="${n.from?.profilePic || 'https://via.placeholder.com/40'}" alt="">
+        ${n.from?.profilePic 
+          ? `<img src="${n.from.profilePic}">` 
+          : `<div class="default-avatar" style="width:40px;height:40px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${n.from?.name?.charAt(0).toUpperCase() || '?'}</div>`}
         <div class="notification-content">
           <div class="notification-text">${n.message}</div>
           <div class="notification-time">${formatTime(n.createdAt)}</div>
         </div>
       </div>
     `).join('');
-    // Mark as read when clicked
     document.querySelectorAll('.notification-item').forEach(item => {
       item.addEventListener('click', async () => {
         const id = item.dataset.notificationId;
         await apiRequest(`/api/notifications/${id}/read`, { method: 'POST' });
         item.classList.remove('unread');
-        // Navigate based on type
         if (item.dataset.type === 'follow') {
           openProfile(item.dataset.from);
         } else if (item.dataset.type === 'like' || item.dataset.type === 'comment') {
@@ -785,11 +855,8 @@ async function loadNotifications() {
 }
 
 function handleNewNotification(data) {
-  // Update badge or reload if notifications view open
   if (document.getElementById('notifications-view')?.classList.contains('active')) {
     loadNotifications();
-  } else {
-    // Show a small badge on nav icon (simplified – just reload when tab opened)
   }
 }
 
@@ -815,13 +882,19 @@ async function renderProfile(userId) {
     const profileHtml = `
       <div class="view active" id="profile-view">
         <div class="profile-header glass-card">
-          <img src="${user.profilePic || 'https://via.placeholder.com/80'}" class="profile-avatar">
+          <div style="position: relative;">
+            ${user.profilePic 
+              ? `<img src="${user.profilePic}" class="profile-avatar">` 
+              : `<div class="default-avatar profile-avatar" style="background:var(--primary);">${user.name.charAt(0).toUpperCase()}</div>`}
+            ${isOwn ? `<i class="fas fa-cog settings-icon" onclick="document.getElementById('settings-modal').classList.add('active')"></i>` : ''}
+          </div>
           <div>
             <h3>
-              ${user.name} @${user.username}
+              ${user.name}
               ${user.verified ? '<span class="verified-badge">✓</span>' : ''}
               ${user.ownerBadge ? '<span class="owner-badge">👑</span>' : ''}
             </h3>
+            <p>@${user.username}</p>
             <p>SSN: ${user.ssn}</p>
             <div class="profile-stats">
               <div class="stat" id="followers-stat">
@@ -838,7 +911,6 @@ async function renderProfile(userId) {
               </div>
             </div>
             ${!isOwn ? `<button class="follow-btn btn-primary" data-user-id="${userId}">${user.isFollowing ? 'Unfollow' : 'Follow'}</button>` : ''}
-            ${isOwn ? `<button class="edit-profile-btn btn-secondary" id="open-edit-profile"><i class="fas fa-edit"></i> Edit Profile</button>` : ''}
             ${!isOwn ? `<button class="add-contact-btn btn-secondary" data-user-id="${userId}"><i class="fas fa-user-plus"></i> Add Contact</button>` : ''}
           </div>
         </div>
@@ -861,14 +933,14 @@ async function renderProfile(userId) {
         <div class="suggestions-row">
           ${suggestions.map(s => `
             <div class="suggestion-item" onclick="openProfile('${s._id}')">
-              <img src="${s.profilePic || 'https://via.placeholder.com/60'}">
+              ${s.profilePic 
+                ? `<img src="${s.profilePic}">` 
+                : `<div class="default-avatar" style="width:60px;height:60px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${s.name.charAt(0).toUpperCase()}</div>`}
               <span>${s.username}</span>
             </div>
           `).join('')}
         </div>
         ` : ''}
-        
-        ${isOwn ? `<button class="btn-secondary" id="settings-btn" style="margin-top:10px; width:100%;"><i class="fas fa-cog"></i> Settings</button>` : ''}
       </div>
     `;
     contentArea.innerHTML = profileHtml;
@@ -884,10 +956,8 @@ async function renderProfile(userId) {
         document.getElementById('add-contact-modal').classList.add('active');
       });
     } else {
-      document.getElementById('open-edit-profile').addEventListener('click', openEditProfileModal);
-      document.getElementById('settings-btn').addEventListener('click', () => {
-        document.getElementById('settings-modal').classList.add('active');
-      });
+      // Edit profile button is now the gear icon, but we already have settings icon
+      // The gear icon opens settings modal, which contains edit profile option
     }
 
     document.getElementById('followers-stat').addEventListener('click', () => showFollowList(userId, 'followers'));
@@ -921,10 +991,12 @@ async function showFollowList(userId, type) {
     const list = document.getElementById(`${type}-list`);
     list.innerHTML = users.map(u => `
       <div class="user-item" data-user-id="${u._id}">
-        <img src="${u.profilePic || 'https://via.placeholder.com/40'}">
+        ${u.profilePic 
+          ? `<img src="${u.profilePic}">` 
+          : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${u.name.charAt(0).toUpperCase()}</div>`}
         <div class="user-info">
           <h4>
-            ${u.name} @${u.username}
+            ${u.name}
             ${u.verified ? '<span class="verified-badge">✓</span>' : ''}
             ${u.ownerBadge ? '<span class="owner-badge">👑</span>' : ''}
           </h4>
@@ -957,7 +1029,7 @@ function openEditProfileModal() {
   document.getElementById('edit-education').value = currentUser.education || '';
   document.getElementById('edit-location').value = currentUser.location || '';
   document.getElementById('edit-relationship').value = currentUser.relationship || '';
-  document.getElementById('edit-profile-pic').src = currentUser.profilePic || 'https://via.placeholder.com/100';
+  document.getElementById('edit-profile-pic').src = currentUser.profilePic || '';
   modal.classList.add('active');
 }
 
@@ -1037,6 +1109,10 @@ let currentChatTab = 'all';
 async function renderChats() {
   contentArea.innerHTML = `
     <div class="view active" id="chats-view">
+      <div class="chats-header">
+        <h3>Chats</h3>
+        <button id="new-chat-btn"><i class="fas fa-plus"></i></button>
+      </div>
       <div class="chats-tabs">
         <button class="chat-tab ${currentChatTab === 'all' ? 'active' : ''}" data-tab="all">All</button>
         <button class="chat-tab ${currentChatTab === 'contacts' ? 'active' : ''}" data-tab="contacts">Contacts</button>
@@ -1046,7 +1122,10 @@ async function renderChats() {
         <div class="chats-list" id="chats-list"></div>
       </div>
       <div class="chat-window hidden" id="chat-window">
-        <div class="chat-header" id="chat-header"></div>
+        <div class="chat-header" id="chat-header">
+          <button class="btn-icon" id="back-from-chat"><i class="fas fa-arrow-left"></i></button>
+          <div id="chat-header-info"></div>
+        </div>
         <div class="chat-messages" id="chat-messages"></div>
         <div class="chat-input-area">
           <input type="text" id="chat-input" placeholder="Type a message...">
@@ -1057,6 +1136,23 @@ async function renderChats() {
       </div>
     </div>
   `;
+
+  document.getElementById('new-chat-btn').addEventListener('click', () => {
+    document.getElementById('new-chat-modal').classList.add('active');
+  });
+
+  document.getElementById('back-from-chat').addEventListener('click', () => {
+    // Go back to chats list
+    document.getElementById('chat-window').classList.add('hidden');
+    document.getElementById('chats-list-container').classList.remove('hidden');
+    currentChatUser = null;
+    currentGroup = null;
+    activeChatId = null;
+    activeGroupId = null;
+    // Update history
+    historyStack.pop(); // remove chat state
+    loadView('chats', null, false);
+  });
 
   document.querySelectorAll('.chat-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1112,7 +1208,9 @@ async function loadAllChats() {
       if (item.type === 'chat') {
         return `
           <div class="chat-item" data-chat-id="${item._id}" data-user-id="${item.otherUser?._id}" data-type="chat">
-            <img src="${item.otherUser?.profilePic || 'https://via.placeholder.com/50'}">
+            ${item.otherUser?.profilePic 
+              ? `<img src="${item.otherUser.profilePic}">` 
+              : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${item.otherUser?.name?.charAt(0).toUpperCase() || '?'}</div>`}
             <div class="chat-info">
               <div class="chat-name">
                 ${item.otherUser?.name || 'Unknown'}
@@ -1128,7 +1226,9 @@ async function loadAllChats() {
       } else {
         return `
           <div class="chat-item" data-group-id="${item._id}" data-type="group">
-            <img src="${item.dp || 'https://via.placeholder.com/50'}">
+            ${item.dp 
+              ? `<img src="${item.dp}">` 
+              : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${item.name.charAt(0).toUpperCase()}</div>`}
             <div class="chat-info">
               <div class="chat-name">${item.name}</div>
               <div class="chat-last">${item.lastMessage?.content || 'No messages'}</div>
@@ -1148,7 +1248,9 @@ async function loadGroupsList() {
     const list = document.getElementById('chats-list');
     list.innerHTML = groups.map(g => `
       <div class="chat-item" data-group-id="${g._id}" data-type="group">
-        <img src="${g.dp || 'https://via.placeholder.com/50'}">
+        ${g.dp 
+          ? `<img src="${g.dp}">` 
+          : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${g.name.charAt(0).toUpperCase()}</div>`}
         <div class="chat-info">
           <div class="chat-name">${g.name}</div>
           <div class="chat-last">${g.lastMessage?.content || 'No messages'}</div>
@@ -1166,7 +1268,9 @@ async function loadContactsList() {
     const list = document.getElementById('chats-list');
     list.innerHTML = contacts.map(c => `
       <div class="chat-item" data-user-id="${c.contact._id}" data-type="contact">
-        <img src="${c.contact.profilePic || 'https://via.placeholder.com/50'}">
+        ${c.contact.profilePic 
+          ? `<img src="${c.contact.profilePic}">` 
+          : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${c.contact.name.charAt(0).toUpperCase()}</div>`}
         <div class="chat-info">
           <div class="chat-name">
             ${c.nickname || c.contact.name}
@@ -1196,7 +1300,7 @@ function attachChatItemListeners() {
   });
 }
 
-async function openChat(otherUserId, chatId) {
+async function openChat(otherUserId, chatId, addToHistory = true) {
   if (!otherUserId) return;
   currentChatUser = otherUserId;
   currentGroup = null;
@@ -1224,21 +1328,25 @@ async function openChat(otherUserId, chatId) {
   }
 
   const otherUser = await apiRequest(`/api/users/${otherUserId}`);
-  document.getElementById('chat-header').innerHTML = `
-    <img src="${otherUser.profilePic || 'https://via.placeholder.com/40'}" style="width:40px; height:40px; border-radius:50%; margin-right:10px;">
+  document.getElementById('chat-header-info').innerHTML = `
+    ${otherUser.profilePic 
+      ? `<img src="${otherUser.profilePic}" style="width:40px;height:40px;border-radius:50%;">` 
+      : `<div class="default-avatar" style="width:40px;height:40px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${otherUser.name.charAt(0).toUpperCase()}</div>`}
     <div>
       <strong>${otherUser.name}</strong>
       ${otherUser.verified ? '<span class="verified-badge">✓</span>' : ''}
       ${otherUser.ownerBadge ? '<span class="owner-badge">👑</span>' : ''}
     </div>
   `;
-  document.getElementById('send-chat').onclick = sendPrivateMessage;
+  documet.getElementById('send-chat').onclick = sendPrivateMessage;
   document.getElementById('chat-input').onkeypress = (e) => {
     if (e.key === 'Enter') sendPrivateMessage();
   };
+
+  if (addToHistory) pushHistory('chat', otherUserId, activeChatId);
 }
 
-async function openGroup(groupId) {
+async function openGroup(groupId, addToHistory = true) {
   if (!groupId) return;
   currentGroup = groupId;
   currentChatUser = null;
@@ -1254,8 +1362,10 @@ async function openGroup(groupId) {
   socket.emit('join group', groupId);
 
   const group = await apiRequest(`/api/groups/${groupId}`);
-  document.getElementById('chat-header').innerHTML = `
-    <img src="${group.dp || 'https://via.placeholder.com/40'}" style="width:40px; height:40px; border-radius:50%; margin-right:10px;">
+  document.getElementById('chat-header-info').innerHTML = `
+    ${group.dp 
+      ? `<img src="${group.dp}" style="width:40px;height:40px;border-radius:50%;">` 
+      : `<div class="default-avatar" style="width:40px;height:40px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${group.name.charAt(0).toUpperCase()}</div>`}
     <div>
       <strong>${group.name}</strong>
       ${group.admins?.includes(currentUser._id) ? ' (Admin)' : ''}
@@ -1267,6 +1377,8 @@ async function openGroup(groupId) {
   document.getElementById('chat-input').onkeypress = (e) => {
     if (e.key === 'Enter') sendGroupMessage();
   };
+
+  if (addToHistory) pushHistory('group', groupId, null, groupId);
 }
 
 function renderMessages(messages, type) {
@@ -1277,16 +1389,16 @@ function renderMessages(messages, type) {
     const dateHeader = formatDateHeader(m.createdAt);
     let headerHtml = '';
     if (dateHeader !== lastDate) {
-      headerHtml = `<div class="date-separator">${dateHeader}</div>`;
+      headerHtml = `<div class="date-separator" style="text-align:center;color:var(--text-secondary);margin:10px 0;">${dateHeader}</div>`;
       lastDate = dateHeader;
     }
     const timeStr = formatExactTime(m.createdAt);
     return headerHtml + `
       <div class="message ${isOwn ? 'own' : ''}" data-message-id="${m._id}">
-        ${!isOwn && type === 'group' ? `<img src="${m.sender.profilePic || 'https://via.placeholder.com/20'}" style="width:20px; height:20px; border-radius:50%; margin-right:5px;">` : ''}
+        ${!isOwn && type === 'group' ? (m.sender.profilePic ? `<img src="${m.sender.profilePic}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;background:var(--primary);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;">${m.sender.name.charAt(0).toUpperCase()}</div>`) : ''}
         ${!isOwn && type === 'group' ? `<strong>${m.sender.name}</strong> ` : ''}
         ${m.content}
-        ${m.media && m.media.length ? `<img src="${m.media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
+        ${m.media && m.media.length ? `<img src="${m.media[0].url}" style="max-width:150px;border-radius:10px;display:block;">` : ''}
         <span class="message-time">${timeStr}</span>
         ${isOwn ? `<span class="message-status">${m.readBy?.length > 1 ? '✓✓' : '✓'}</span>` : ''}
         ${(isOwn || (type === 'group' && (currentGroup && (group?.admins?.includes(currentUser._id) || group?.owner?._id === currentUser._id)))) ? 
@@ -1315,6 +1427,11 @@ function handleMessageDeleted(data) {
   if (msgEl) msgEl.remove();
 }
 
+function handleMessageRead(data) {
+  const msgEl = document.querySelector(`.message[data-message-id="${data.messageId}"] .message-status`);
+  if (msgEl) msgEl.textContent = '✓✓';
+}
+
 async function sendPrivateMessage() {
   const text = document.getElementById('chat-input').value.trim();
   const media = chatMediaBase64 ? [{ url: chatMediaBase64, type: 'image' }] : [];
@@ -1329,7 +1446,7 @@ async function sendPrivateMessage() {
   container.innerHTML += `
     <div class="message own">
       ${text}
-      ${media.length ? `<img src="${media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
+      ${media.length ? `<img src="${media[0].url}" style="max-width:150px;border-radius:10px;display:block;">` : ''}
       <span class="message-time">${formatExactTime(new Date())}</span>
       <span class="message-status">✓</span>
     </div>
@@ -1351,7 +1468,7 @@ async function sendGroupMessage() {
   container.innerHTML += `
     <div class="message own">
       ${text}
-      ${media.length ? `<img src="${media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
+      ${media.length ? `<img src="${media[0].url}" style="max-width:150px;border-radius:10px;display:block;">` : ''}
       <span class="message-time">${formatExactTime(new Date())}</span>
       <span class="message-status">✓</span>
     </div>
@@ -1364,9 +1481,9 @@ function handleIncomingPrivateMessage(data) {
     const container = document.getElementById('chat-messages');
     container.innerHTML += `
       <div class="message">
-        <img src="${data.fromAvatar || 'https://via.placeholder.com/20'}" style="width:20px; height:20px; border-radius:50%; margin-right:5px;">
+        ${data.fromAvatar ? `<img src="${data.fromAvatar}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;background:var(--primary);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;">${data.fromName.charAt(0).toUpperCase()}</div>`}
         <strong>${data.fromName}</strong> ${data.content}
-        ${data.media && data.media.length ? `<img src="${data.media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
+        ${data.media && data.media.length ? `<img src="${data.media[0].url}" style="max-width:150px;border-radius:10px;display:block;">` : ''}
         <span class="message-time">${formatExactTime(data.createdAt)}</span>
       </div>
     `;
@@ -1383,9 +1500,9 @@ function handleIncomingGroupMessage(data) {
     const container = document.getElementById('chat-messages');
     container.innerHTML += `
       <div class="message">
-        <img src="${data.fromAvatar || 'https://via.placeholder.com/20'}" style="width:20px; height:20px; border-radius:50%; margin-right:5px;">
+        ${data.fromAvatar ? `<img src="${data.fromAvatar}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;background:var(--primary);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;">${data.fromName.charAt(0).toUpperCase()}</div>`}
         <strong>${data.fromName}</strong> ${data.content}
-        ${data.media && data.media.length ? `<img src="${data.media[0].url}" style="max-width:150px; border-radius:10px; display:block;">` : ''}
+        ${data.media && data.media.length ? `<img src="${data.media[0].url}" style="max-width:150px;border-radius:10px;display:block;">` : ''}
         <span class="message-time">${formatExactTime(data.createdAt)}</span>
       </div>
     `;
@@ -1423,7 +1540,7 @@ async function openGroupSettings(group) {
     const memberIsAdmin = group.admins.includes(member._id);
     membersList.innerHTML += `
       <div class="user-item">
-        <img src="${member.profilePic || 'https://via.placeholder.com/40'}" width="30">
+        ${member.profilePic ? `<img src="${member.profilePic}" width="30">` : `<div class="default-avatar" style="width:30px;height:30px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;">${member.name.charAt(0).toUpperCase()}</div>`}
         <span>${member.name} ${memberIsAdmin ? '(Admin)' : ''}</span>
         ${isAdmin && member._id !== currentUser._id ? `
           <button class="btn-secondary promote-admin" data-user-id="${member._id}">Make Admin</button>
@@ -1452,7 +1569,7 @@ async function openGroupSettings(group) {
         });
         showPopup('User promoted to admin', 'success');
         modal.classList.remove('active');
-        openGroup(group._id);
+        openGroup(group._id, false);
       } catch (err) {
         showPopup(err.message, 'error');
       }
@@ -1466,7 +1583,7 @@ async function openGroupSettings(group) {
         await apiRequest(`/api/groups/${group._id}/admins/${userId}`, { method: 'DELETE' });
         showPopup('Admin demoted', 'success');
         modal.classList.remove('active');
-        openGroup(group._id);
+        openGroup(group._id, false);
       } catch (err) {
         showPopup(err.message, 'error');
       }
@@ -1485,7 +1602,7 @@ async function openGroupSettings(group) {
         });
         showPopup('Member removed', 'success');
         modal.classList.remove('active');
-        openGroup(group._id);
+        openGroup(group._id, false);
       } catch (err) {
         showPopup(err.message, 'error');
       }
@@ -1522,7 +1639,7 @@ async function updateGroup() {
     });
     showPopup('Group updated', 'success');
     document.getElementById('group-settings-modal').classList.remove('active');
-    openGroup(currentGroupObj._id);
+    openGroup(currentGroupObj._id, false);
   } catch (err) {
     showPopup(err.message, 'error');
   }
@@ -1558,6 +1675,21 @@ function copyInviteLink() {
   showPopup('Invite link copied!', 'success');
 }
 
+async function loadContactsForGroup() {
+  try {
+    const contacts = await apiRequest('/api/contacts');
+    const container = document.getElementById('contact-select-list');
+    container.innerHTML = contacts.map(c => `
+      <div>
+        <input type="checkbox" id="contact-${c.contact._id}" value="${c.contact._id}">
+        <label for="contact-${c.contact._id}">${c.nickname || c.contact.name}</label>
+      </div>
+    `).join('');
+  } catch (err) {
+    showPopup(err.message, 'error');
+  }
+}
+
 // ==================== Navigation Helpers ====================
 async function navigateToChat(userId) {
   await loadView('chats');
@@ -1571,3 +1703,5 @@ function openProfile(userId) {
 // Make functions global for onclick attributes
 window.openProfile = openProfile;
 window.deleteMessage = deleteMessage;
+window.openEditProfileModal = openEditProfileModal;
+    
