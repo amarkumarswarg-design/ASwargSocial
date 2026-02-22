@@ -116,11 +116,6 @@ io.on('connection', (socket) => {
       await chat.save();
 
       await message.populate('sender', 'name username profilePic verified ownerBadge isBroadcast');
-
-      // If sender is broadcast account (Swarg Social) and receiver is Amar? Actually we'll handle via special logic:
-      // But we want Amar to message broadcast account, and that sends broadcast.
-      // We'll check in the route instead, but socket also used.
-      // We'll move broadcast logic to API route only for simplicity.
       io.to(to).emit('private message', {
         _id: message._id,
         from: socket.userId,
@@ -255,17 +250,27 @@ app.post('/api/auth/register', async (req, res) => {
     await user.save();
 
     // Send welcome notification from broadcast account
-    const broadcastAccount = await User.findOne({ username: 'swarg' });
-    if (broadcastAccount) {
-      const welcomeNotif = new Notification({
-        user: user._id,
-        type: 'system',
-        from: broadcastAccount._id,
-        message: 'Welcome to Swarg Social!'
+    let broadcastAccount = await User.findOne({ username: 'swarg' });
+    if (!broadcastAccount) {
+      broadcastAccount = new User({
+        name: 'Swarg Social',
+        username: 'swarg',
+        password: Math.random().toString(36),
+        ssn: '+1(212)908-9999',
+        verified: true,
+        isBroadcast: true,
+        ownerBadge: false
       });
-      await welcomeNotif.save();
-      io.to(user._id.toString()).emit('new notification', { notification: welcomeNotif });
+      await broadcastAccount.save();
     }
+    const welcomeNotif = new Notification({
+      user: user._id,
+      type: 'system',
+      from: broadcastAccount._id,
+      message: 'Welcome to Swarg Social!'
+    });
+    await welcomeNotif.save();
+    io.to(user._id.toString()).emit('new notification', { notification: welcomeNotif });
 
     res.status(201).json({ user: { ...user.toObject(), password: undefined }, token: generateToken(user) });
   } catch (err) {
@@ -458,21 +463,17 @@ app.delete('/api/users/me', authMiddleware, async (req, res) => {
 });
 
 // ---- Broadcast account special route ----
-// Only @Amar can message the broadcast account (username 'swarg')
 app.post('/api/broadcast', authMiddleware, async (req, res) => {
   try {
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: 'Message required' });
 
-    // Check if sender is @Amar
     if (req.user.username !== 'amar') {
       return res.status(403).json({ error: 'Only Amar can broadcast' });
     }
 
-    // Get broadcast account
     let broadcast = await User.findOne({ username: 'swarg' });
     if (!broadcast) {
-      // Create broadcast account if not exists
       broadcast = new User({
         name: 'Swarg Social',
         username: 'swarg',
@@ -485,10 +486,8 @@ app.post('/api/broadcast', authMiddleware, async (req, res) => {
       await broadcast.save();
     }
 
-    // Send system notification to all users
     io.emit('system notification', { message, from: 'Swarg Social' });
 
-    // Also create a notification for every user (optional, but we'll just emit)
     res.json({ success: true, message: 'Broadcast sent' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -597,7 +596,7 @@ app.get('/api/contacts', authMiddleware, async (req, res) => {
 
 app.post('/api/contacts', authMiddleware, async (req, res) => {
   try {
-    const { identifier, nickname } = req.body; // identifier can be username or SSN
+    const { identifier, nickname } = req.body;
     let contactUser;
     if (identifier.startsWith('+')) {
       contactUser = await User.findOne({ ssn: identifier });
@@ -634,7 +633,7 @@ app.delete('/api/contacts/:contactId', authMiddleware, async (req, res) => {
 // ---- Groups ----
 app.post('/api/groups', authMiddleware, async (req, res) => {
   try {
-    const { name, dp, members } = req.body; // members is array of userIds
+    const { name, dp, members } = req.body;
     let dpUrl = '', dpPublicId = '';
     if (dp && dp.startsWith('data:image')) {
       const upload = await cloudinary.uploader.upload(dp, { folder: 'swarg_social/groups' });
@@ -760,7 +759,6 @@ app.delete('/api/groups/:groupId/members/:userId', authMiddleware, async (req, r
     group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
     await group.save();
 
-    // Notify removed user
     const notification = new Notification({
       user: req.params.userId,
       type: 'system',
@@ -850,7 +848,6 @@ app.get('/join/:code', async (req, res) => {
   try {
     const invite = await Invite.findOne({ code: req.params.code, expiresAt: { $gt: new Date() } });
     if (!invite) return res.status(404).send('Invite expired or invalid');
-    // We'll handle joining via frontend with a query param
     res.redirect(`/?joinGroup=${invite.groupId}`);
   } catch (err) {
     res.status(500).send('Server error');
@@ -1012,6 +1009,17 @@ app.get('/api/posts/feed', authMiddleware, async (req, res) => {
       .skip((page - 1) * 10).limit(10)
       .populate('user', 'name username profilePic verified ownerBadge')
       .populate('comments.user', 'name username profilePic verified ownerBadge');
+
+    // Add isFollowing for each post author
+    const userIds = posts.map(p => p.user._id);
+    const follows = await Follow.find({ follower: req.user._id, following: { $in: userIds } });
+    const followingMap = {};
+    follows.forEach(f => followingMap[f.following.toString()] = true);
+    posts.forEach(p => {
+      p.user = p.user.toObject();
+      p.user.isFollowing = followingMap[p.user._id.toString()] || false;
+    });
+
     res.json(posts);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
