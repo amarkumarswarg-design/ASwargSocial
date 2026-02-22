@@ -44,7 +44,6 @@ mongoose.connect(process.env.MONGO_URI, {
   .catch(err => console.error('❌ MongoDB connection error:', err));
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const BOT_SECRET = process.env.BOT_SECRET;
 
 // ========== Helpers ==========
 async function generateSSN() {
@@ -58,7 +57,7 @@ async function generateSSN() {
 
 function generateToken(user) {
   return jwt.sign(
-    { id: user._id, username: user.username, isBot: user.isBot },
+    { id: user._id, username: user.username, isBroadcast: user.isBroadcast },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -116,9 +115,12 @@ io.on('connection', (socket) => {
       chat.updatedAt = Date.now();
       await chat.save();
 
-      await message.populate('sender', 'name username profilePic verified ownerBadge');
-      
-      // Send to recipient
+      await message.populate('sender', 'name username profilePic verified ownerBadge isBroadcast');
+
+      // If sender is broadcast account (Swarg Social) and receiver is Amar? Actually we'll handle via special logic:
+      // But we want Amar to message broadcast account, and that sends broadcast.
+      // We'll check in the route instead, but socket also used.
+      // We'll move broadcast logic to API route only for simplicity.
       io.to(to).emit('private message', {
         _id: message._id,
         from: socket.userId,
@@ -126,13 +128,13 @@ io.on('connection', (socket) => {
         fromAvatar: message.sender.profilePic,
         fromVerified: message.sender.verified,
         fromOwner: message.sender.ownerBadge,
+        fromBroadcast: message.sender.isBroadcast,
         content,
         media: message.media,
         createdAt: message.createdAt,
-        status: 'sent' // single tick
+        status: 'sent'
       });
 
-      // Create notification
       const notification = new Notification({
         user: to,
         type: 'message',
@@ -165,8 +167,6 @@ io.on('connection', (socket) => {
       await group.save();
 
       await message.populate('sender', 'name username profilePic verified ownerBadge');
-      
-      // Broadcast to group
       io.to(`group_${groupId}`).emit('group message', {
         _id: message._id,
         from: socket.userId,
@@ -180,7 +180,6 @@ io.on('connection', (socket) => {
         groupId
       });
 
-      // Notify other members
       for (const memberId of group.members) {
         if (memberId.toString() !== socket.userId) {
           const notification = new Notification({
@@ -227,7 +226,7 @@ app.post('/api/auth/register', async (req, res) => {
         profilePicPublicId = upload.public_id;
       } catch (uploadErr) {
         console.error('Cloudinary upload error:', uploadErr);
-        return res.status(500).json({ error: 'Failed to upload profile picture: ' + uploadErr.message });
+        // Don't fail registration, just continue without profile pic
       }
     }
 
@@ -254,6 +253,19 @@ app.post('/api/auth/register', async (req, res) => {
       }
     });
     await user.save();
+
+    // Send welcome notification from broadcast account
+    const broadcastAccount = await User.findOne({ username: 'swarg' });
+    if (broadcastAccount) {
+      const welcomeNotif = new Notification({
+        user: user._id,
+        type: 'system',
+        from: broadcastAccount._id,
+        message: 'Welcome to Swarg Social!'
+      });
+      await welcomeNotif.save();
+      io.to(user._id.toString()).emit('new notification', { notification: welcomeNotif });
+    }
 
     res.status(201).json({ user: { ...user.toObject(), password: undefined }, token: generateToken(user) });
   } catch (err) {
@@ -358,16 +370,14 @@ app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
       Post.countDocuments({ user: user._id })
     ]);
 
-    // Auto-verify if real followers >= 100, but owner badge overrides
     if (!user.verified && !user.ownerBadge && followersCount >= 100) {
       user.verified = true;
       await user.save();
     }
 
-    // Special case for username @Amar: ensure ownerBadge is true
     if (user.username === 'amar' && !user.ownerBadge) {
       user.ownerBadge = true;
-      user.verified = true; // also give blue tick
+      user.verified = true;
       await user.save();
     }
 
@@ -447,6 +457,44 @@ app.delete('/api/users/me', authMiddleware, async (req, res) => {
   }
 });
 
+// ---- Broadcast account special route ----
+// Only @Amar can message the broadcast account (username 'swarg')
+app.post('/api/broadcast', authMiddleware, async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message required' });
+
+    // Check if sender is @Amar
+    if (req.user.username !== 'amar') {
+      return res.status(403).json({ error: 'Only Amar can broadcast' });
+    }
+
+    // Get broadcast account
+    let broadcast = await User.findOne({ username: 'swarg' });
+    if (!broadcast) {
+      // Create broadcast account if not exists
+      broadcast = new User({
+        name: 'Swarg Social',
+        username: 'swarg',
+        password: Math.random().toString(36),
+        ssn: '+1(212)908-9999',
+        verified: true,
+        ownerBadge: false,
+        isBroadcast: true
+      });
+      await broadcast.save();
+    }
+
+    // Send system notification to all users
+    io.emit('system notification', { message, from: 'Swarg Social' });
+
+    // Also create a notification for every user (optional, but we'll just emit)
+    res.json({ success: true, message: 'Broadcast sent' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Follow ----
 app.post('/api/follow/:userId', authMiddleware, async (req, res) => {
   try {
@@ -462,7 +510,6 @@ app.post('/api/follow/:userId', authMiddleware, async (req, res) => {
       await followedUser.save();
     }
 
-    // Create notification for followed user
     const notification = new Notification({
       user: req.params.userId,
       type: 'follow',
@@ -550,8 +597,13 @@ app.get('/api/contacts', authMiddleware, async (req, res) => {
 
 app.post('/api/contacts', authMiddleware, async (req, res) => {
   try {
-    const { contactSsn, nickname } = req.body;
-    const contactUser = await User.findOne({ ssn: contactSsn });
+    const { identifier, nickname } = req.body; // identifier can be username or SSN
+    let contactUser;
+    if (identifier.startsWith('+')) {
+      contactUser = await User.findOne({ ssn: identifier });
+    } else {
+      contactUser = await User.findOne({ username: identifier.toLowerCase() });
+    }
     if (!contactUser) return res.status(404).json({ error: 'User not found' });
     if (contactUser._id.equals(req.user._id)) return res.status(400).json({ error: 'Cannot add yourself' });
 
@@ -582,10 +634,18 @@ app.delete('/api/contacts/:contactId', authMiddleware, async (req, res) => {
 // ---- Groups ----
 app.post('/api/groups', authMiddleware, async (req, res) => {
   try {
-    const { name, members } = req.body;
+    const { name, dp, members } = req.body; // members is array of userIds
+    let dpUrl = '', dpPublicId = '';
+    if (dp && dp.startsWith('data:image')) {
+      const upload = await cloudinary.uploader.upload(dp, { folder: 'swarg_social/groups' });
+      dpUrl = upload.secure_url;
+      dpPublicId = upload.public_id;
+    }
     const allMembers = [req.user._id, ...(members || [])];
     const group = new Group({
       name,
+      dp: dpUrl,
+      dpPublicId,
       owner: req.user._id,
       admins: [req.user._id],
       members: allMembers
@@ -700,26 +760,15 @@ app.delete('/api/groups/:groupId/members/:userId', authMiddleware, async (req, r
     group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
     await group.save();
 
-    const bot = await User.findOne({ isBot: true });
-    if (bot) {
-      const message = new Message({
-        chat: null,
-        group: null,
-        sender: bot._id,
-        content: `You were removed from group "${group.name}"${reason ? ` because: ${reason}` : ''}.`,
-        readBy: [bot._id]
-      });
-      await message.save();
-      io.to(req.params.userId).emit('private message', {
-        _id: message._id,
-        from: bot._id,
-        fromName: bot.name,
-        fromAvatar: bot.profilePic,
-        content: message.content,
-        media: [],
-        createdAt: message.createdAt
-      });
-    }
+    // Notify removed user
+    const notification = new Notification({
+      user: req.params.userId,
+      type: 'system',
+      from: null,
+      message: `You were removed from group "${group.name}"${reason ? ` because: ${reason}` : ''}`
+    });
+    await notification.save();
+    io.to(req.params.userId).emit('new notification', { notification });
 
     res.json(group);
   } catch (err) {
@@ -801,6 +850,7 @@ app.get('/join/:code', async (req, res) => {
   try {
     const invite = await Invite.findOne({ code: req.params.code, expiresAt: { $gt: new Date() } });
     if (!invite) return res.status(404).send('Invite expired or invalid');
+    // We'll handle joining via frontend with a query param
     res.redirect(`/?joinGroup=${invite.groupId}`);
   } catch (err) {
     res.status(500).send('Server error');
@@ -1119,12 +1169,10 @@ app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
     const messages = await Message.find({ chat: chat._id })
       .populate('sender', 'name username profilePic verified ownerBadge')
       .sort({ createdAt: 1 });
-    // Mark messages as read
     await Message.updateMany(
       { chat: chat._id, readBy: { $ne: req.user._id } },
       { $addToSet: { readBy: req.user._id } }
     );
-    // Emit read receipts to sender
     for (const msg of messages) {
       if (msg.sender._id.toString() !== req.user._id) {
         io.to(msg.sender._id.toString()).emit('message read', { messageId: msg._id });
@@ -1143,7 +1191,6 @@ app.get('/api/groups/:groupId/messages', authMiddleware, async (req, res) => {
     const messages = await Message.find({ group: group._id })
       .populate('sender', 'name username profilePic verified ownerBadge')
       .sort({ createdAt: 1 });
-    // Mark messages as read
     await Message.updateMany(
       { group: group._id, readBy: { $ne: req.user._id } },
       { $addToSet: { readBy: req.user._id } }
@@ -1187,35 +1234,10 @@ app.delete('/api/messages/:messageId', authMiddleware, async (req, res) => {
   }
 });
 
-// ---- Bot ----
-app.post('/api/bot/login', async (req, res) => {
-  if (req.body.password !== BOT_SECRET) return res.status(401).json({ error: 'Invalid bot credentials' });
-  let bot = await User.findOne({ isBot: true });
-  if (!bot) {
-    bot = new User({
-      name: 'Swarg Social Bot',
-      username: 'swargbot',
-      password: Math.random().toString(36),
-      ssn: '+1(212)908-0000',
-      isBot: true,
-      verified: true,
-      ownerBadge: false
-    });
-    await bot.save();
-  }
-  res.json({ token: generateToken(bot), user: { ...bot.toObject(), password: undefined } });
-});
-
-app.post('/api/bot/broadcast', authMiddleware, async (req, res) => {
-  if (!req.user.isBot) return res.status(403).json({ error: 'Only bot can broadcast' });
-  io.emit('system notification', { message: req.body.message, from: 'Swarg Social Bot' });
-  res.json({ success: true });
-});
-
 // Catch‑all
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`)); 
+server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
