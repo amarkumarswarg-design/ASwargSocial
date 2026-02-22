@@ -19,6 +19,7 @@ const Group = require('./models/Group');
 const Story = require('./models/Story');
 const Contact = require('./models/Contact');
 const Invite = require('./models/Invite');
+const Notification = require('./models/Notification'); // new
 
 const app = express();
 const server = http.createServer(app);
@@ -127,6 +128,17 @@ io.on('connection', (socket) => {
         media: message.media,
         createdAt: message.createdAt
       });
+
+      // Create notification for the recipient
+      const notification = new Notification({
+        user: to,
+        type: 'message',
+        from: socket.userId,
+        post: null,
+        message: `New message from ${message.sender.name}`
+      });
+      await notification.save();
+      io.to(to).emit('new notification', { notification });
     } catch (err) {
       console.error('Socket private message error:', err);
     }
@@ -163,6 +175,21 @@ io.on('connection', (socket) => {
         createdAt: message.createdAt,
         groupId
       });
+
+      // Create notifications for group members (except sender)
+      for (const memberId of group.members) {
+        if (memberId.toString() !== socket.userId) {
+          const notification = new Notification({
+            user: memberId,
+            type: 'group_message',
+            from: socket.userId,
+            group: groupId,
+            message: `New message in ${group.name} from ${message.sender.name}`
+          });
+          await notification.save();
+          io.to(memberId.toString()).emit('new notification', { notification });
+        }
+      }
     } catch (err) {
       console.error('Socket group message error:', err);
     }
@@ -320,10 +347,11 @@ app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
     const user = await User.findOne(query).select('-password');
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const [followersCount, followingCount, isFollowing] = await Promise.all([
+    const [followersCount, followingCount, isFollowing, postsCount] = await Promise.all([
       Follow.countDocuments({ following: user._id }),
       Follow.countDocuments({ follower: user._id }),
-      Follow.exists({ follower: req.user._id, following: user._id })
+      Follow.exists({ follower: req.user._id, following: user._id }),
+      Post.countDocuments({ user: user._id })
     ]);
 
     // Auto-verify if real followers >= 100
@@ -336,7 +364,8 @@ app.get('/api/users/:identifier', authMiddleware, async (req, res) => {
       ...user.toObject(),
       followersCount,
       followingCount,
-      isFollowing: !!isFollowing
+      isFollowing: !!isFollowing,
+      postsCount
     });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -399,6 +428,7 @@ app.delete('/api/users/me', authMiddleware, async (req, res) => {
       { $pull: { members: req.user._id, admins: req.user._id } }
     );
     await Contact.deleteMany({ $or: [{ owner: req.user._id }, { contact: req.user._id }] });
+    await Notification.deleteMany({ $or: [{ user: req.user._id }, { from: req.user._id }] });
     await User.findByIdAndDelete(req.user._id);
     res.json({ message: 'Account deleted' });
   } catch (err) {
@@ -414,13 +444,22 @@ app.post('/api/follow/:userId', authMiddleware, async (req, res) => {
     if (exists) return res.status(400).json({ error: 'Already following' });
     await Follow.create({ follower: req.user._id, following: req.params.userId });
 
-    // Check if followed user should be verified (real followers)
     const followedUser = await User.findById(req.params.userId);
     const followersCount = await Follow.countDocuments({ following: followedUser._id });
     if (!followedUser.verified && !followedUser.ownerBadge && followersCount >= 100) {
       followedUser.verified = true;
       await followedUser.save();
     }
+
+    // Create notification for followed user
+    const notification = new Notification({
+      user: req.params.userId,
+      type: 'follow',
+      from: req.user._id,
+      message: `${req.user.name} started following you`
+    });
+    await notification.save();
+    io.to(req.params.userId).emit('new notification', { notification });
 
     res.json({ message: 'Followed' });
   } catch (err) {
@@ -450,6 +489,39 @@ app.get('/api/users/:userId/following', authMiddleware, async (req, res) => {
   try {
     const follows = await Follow.find({ follower: req.params.userId }).populate('following', 'name username profilePic ssn verified ownerBadge');
     res.json(follows.map(f => f.following));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Notifications ----
+app.get('/api/notifications', authMiddleware, async (req, res) => {
+  try {
+    const notifications = await Notification.find({ user: req.user._id })
+      .populate('from', 'name username profilePic verified ownerBadge')
+      .populate('post', 'content media')
+      .populate('group', 'name dp')
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.json(notifications);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/notifications/:id/read', authMiddleware, async (req, res) => {
+  try {
+    await Notification.findByIdAndUpdate(req.params.id, { read: true });
+    res.json({ message: 'Marked as read' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/notifications/read-all', authMiddleware, async (req, res) => {
+  try {
+    await Notification.updateMany({ user: req.user._id, read: false }, { read: true });
+    res.json({ message: 'All marked as read' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -508,491 +580,9 @@ app.post('/api/groups', authMiddleware, async (req, res) => {
       members: allMembers
     });
     await group.save();
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-app.get('/api/groups', authMiddleware, async (req, res) => {
-  try {
-    const groups = await Group.find({ members: req.user._id })
-      .populate('owner', 'name username profilePic verified ownerBadge')
-      .populate('admins', 'name username profilePic verified ownerBadge')
-      .populate('members', 'name username profilePic verified ownerBadge')
-      .populate('lastMessage');
-    res.json(groups);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/groups/:groupId', authMiddleware, async (req, res) => {
-  try {
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id })
-      .populate('owner', 'name username profilePic verified ownerBadge')
-      .populate('admins', 'name username profilePic verified ownerBadge')
-      .populate('members', 'name username profilePic verified ownerBadge')
-      .populate('lastMessage');
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/groups/:groupId', authMiddleware, async (req, res) => {
-  try {
-    const { name, dp } = req.body;
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (!group.admins.includes(req.user._id)) return res.status(403).json({ error: 'Not authorized' });
-
-    if (name) group.name = name;
-    if (dp && dp.startsWith('data:image')) {
-      if (group.dpPublicId) await cloudinary.uploader.destroy(group.dpPublicId);
-      const upload = await cloudinary.uploader.upload(dp, { folder: 'swarg_social/groups' });
-      group.dp = upload.secure_url;
-      group.dpPublicId = upload.public_id;
-    }
-    await group.save();
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/groups/:groupId/members', authMiddleware, async (req, res) => {
-  try {
-    const { userId } = req.body;
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (!group.admins.includes(req.user._id)) return res.status(403).json({ error: 'Not authorized' });
-
-    if (!group.members.includes(userId)) {
-      group.members.push(userId);
-      await group.save();
-    }
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/groups/:groupId/members/:userId',authMiddleware, async (req, res) => {
-  try {
-    const { reason } = req.body;
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (!group.admins.includes(req.user._id) && req.user._id.toString() !== req.params.userId) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-
-    group.members = group.members.filter(id => id.toString() !== req.params.userId);
-    group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
-    await group.save();
-
-    // Notify removed user via bot (if bot exists)
-    const bot = await User.findOne({ isBot: true });
-    if (bot) {
-      const message = new Message({
-        chat: null,
-        group: null,
-        sender: bot._id,
-        content: `You were removed from group "${group.name}"${reason ? ` because: ${reason}` : ''}.`,
-        readBy: [bot._id]
-      });
-      await message.save();
-      io.to(req.params.userId).emit('private message', {
-        _id: message._id,
-        from: bot._id,
-        fromName: bot.name,
-        fromAvatar: bot.profilePic,
-        content: message.content,
-        media: [],
-        createdAt: message.createdAt
-      });
-    }
-
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/groups/:groupId/admins', authMiddleware, async (req, res) => {
-  try {
-    const { userId } = req.body;
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (group.owner.toString() !== req.user._id.toString()) return res.status(403).json({ error: 'Only owner can promote to admin' });
-    if (!group.members.includes(userId)) return res.status(400).json({ error: 'User not in group' });
-    if (!group.admins.includes(userId)) {
-      group.admins.push(userId);
-      await group.save();
-    }
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/groups/:groupId/admins/:userId', authMiddleware, async (req, res) => {
-  try {
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (group.owner.toString() !== req.user._id.toString()) return res.status(403).json({ error: 'Only owner can demote admin' });
-    group.admins = group.admins.filter(id => id.toString() !== req.params.userId);
-    await group.save();
-    res.json(group);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/groups/:groupId/invite', authMiddleware, async (req, res) => {
-  try {
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    if (!group.admins.includes(req.user._id)) return res.status(403).json({ error: 'Not authorized' });
-
-    const code = crypto.randomBytes(8).toString('hex');
-    const invite = new Invite({
-      groupId: group._id,
-      code,
-      expiresAt: new Date(Date.now() + 7*24*60*60*1000)
-    });
-    await invite.save();
-    res.json({ inviteLink: `${req.protocol}://${req.get('host')}/join/${code}` });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/join/:code', async (req, res) => {
-  try {
-    const invite = await Invite.findOne({ code: req.params.code, expiresAt: { $gt: new Date() } });
-    if (!invite) return res.status(404).send('Invite expired or invalid');
-    // Redirect to frontend with group id
-    res.redirect(`/?joinGroup=${invite.groupId}`);
-  } catch (err) {
-    res.status(500).send('Server error');
-  }
-});
-
-app.delete('/api/groups/:groupId', authMiddleware, async (req, res) => {
-  try {
-    const group = await Group.findOne({ _id: req.params.groupId, owner: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found or not owner' });
-    await Group.findByIdAndDelete(group._id);
-    res.json({ message: 'Group deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Stories ----
-app.post('/api/stories', authMiddleware, async (req, res) => {
-  try {
-    const { media } = req.body;
-    if (!media?.startsWith('data:image')) return res.status(400).json({ error: 'Invalid image' });
-    const upload = await cloudinary.uploader.upload(media, { folder: 'swarg_social/stories' });
-    const story = new Story({
-      user: req.user._id,
-      media: { url: upload.secure_url, publicId: upload.public_id, type: 'image' },
-      expiresAt: new Date(Date.now() + 24*60*60*1000)
-    });
-    await story.save();
-    res.json(story);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/stories/feed', authMiddleware, async (req, res) => {
-  try {
-    const following = await Follow.find({ follower: req.user._id }).distinct('following');
-    following.push(req.user._id);
-    const stories = await Story.find({
-      user: { $in: following },
-      expiresAt: { $gt: new Date() }
-    }).populate('user', 'name username profilePic verified ownerBadge').sort({ createdAt: -1 });
-    res.json(stories);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/stories/:storyId/like', authMiddleware, async (req, res) => {
-  try {
-    const story = await Story.findById(req.params.storyId);
-    if (!story) return res.status(404).json({ error: 'Story not found' });
-    const index = story.viewers.indexOf(req.user._id);
-    if (index === -1) {
-      story.viewers.push(req.user._id);
-    } else {
-      story.viewers.splice(index, 1);
-    }
-    await story.save();
-    res.json({ viewers: story.viewers });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/stories/:storyId', authMiddleware, async (req, res) => {
-  try {
-    const story = await Story.findById(req.params.storyId);
-    if (!story) return res.status(404).json({ error: 'Story not found' });
-    if (story.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    if (story.media.publicId) await cloudinary.uploader.destroy(story.media.publicId);
-    await story.deleteOne();
-    res.json({ message: 'Story deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Posts ----
-app.post('/api/posts', authMiddleware, async (req, res) => {
-  try {
-    const { content, media } = req.body;
-    const processedMedia = [];
-    if (media?.length) {
-      for (const item of media) {
-        if (item.url?.startsWith('data:image')) {
-          try {
-            const upload = await cloudinary.uploader.upload(item.url, {
-              folder: 'swarg_social/posts',
-              timeout: 60000
-            });
-            processedMedia.push({ url: upload.secure_url, publicId: upload.public_id, type: 'image' });
-          } catch (uploadErr) {
-            console.error('Cloudinary upload error:', uploadErr);
-            return res.status(500).json({ error: 'Image upload failed: ' + uploadErr.message });
-          }
-        } else {
-          processedMedia.push(item);
-        }
-      }
-    }
-    const post = new Post({ user: req.user._id, content, media: processedMedia });
-    await post.save();
-    await post.populate('user', 'name username profilePic verified ownerBadge');
-    res.status(201).json(post);
-  } catch (err) {
-    console.error('Post creation error:', err);
-    res.status(500).json({ error: 'Failed to create post' });
-  }
-});
-
-app.get('/api/posts/feed', authMiddleware, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const posts = await Post.find()
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * 10).limit(10)
-      .populate('user', 'name username profilePic verified ownerBadge')
-      .populate('comments.user', 'name username profilePic verified ownerBadge');
-    res.json(posts);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/api/posts/user/:userId', authMiddleware, async (req, res) => {
-  try {
-    const posts = await Post.find({ user: req.params.userId })
-      .sort({ createdAt: -1 })
-      .populate('user', 'name username profilePic verified ownerBadge')
-      .populate('comments.user', 'name username profilePic verified ownerBadge');
-    res.json(posts);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/api/posts/:postId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId)
-      .populate('user', 'name username profilePic verified ownerBadge')
-      .populate('comments.user', 'name username profilePic verified ownerBadge');
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    res.json(post);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/posts/:postId/like', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    const index = post.likes.indexOf(req.user._id);
-    if (index === -1) post.likes.push(req.user._id);
-    else post.likes.splice(index, 1);
-    await post.save();
-    res.json({ likes: post.likes });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.post('/api/posts/:postId/comment', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    post.comments.push({ user: req.user._id, text: req.body.text });
-    await post.save();
-    await post.populate('comments.user', 'name username profilePic verified ownerBadge');
-    res.json(post.comments);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.delete('/api/posts/:postId/comment/:commentId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Not found' });
-    const comment = post.comments.id(req.params.commentId);
-    if (!comment) return res.status(404).json({ error: 'Comment not found' });
-    if (comment.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    comment.remove();
-    await post.save();
-    res.json({ message: 'Deleted' });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.delete('/api/posts/:postId', authMiddleware, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    for (const m of post.media) {
-      if (m.publicId) await cloudinary.uploader.destroy(m.publicId);
-    }
-    await post.deleteOne();
-    res.json({ message: 'Post deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Chat & Messages ----
-app.get('/api/chats', authMiddleware, async (req, res) => {
-  try {
-    const chats = await Chat.find({ participants: req.user._id })
-      .populate('participants', 'name username profilePic verified ownerBadge')
-      .populate('lastMessage')
-      .sort({ updatedAt: -1 });
-    res.json(chats.map(c => {
-      const other = c.participants.find(p => !p._id.equals(req.user._id));
-      return { _id: c._id, otherUser: other, lastMessage: c.lastMessage, updatedAt: c.updatedAt };
-    }));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/chats/:chatId/messages', authMiddleware, async (req, res) => {
-  try {
-    const chat = await Chat.findOne({ _id: req.params.chatId, participants: req.user._id });
-    if (!chat) return res.status(404).json({ error: 'Chat not found' });
-    const messages = await Message.find({ chat: chat._id })
-      .populate('sender', 'name username profilePic verified ownerBadge')
-      .sort({ createdAt: 1 });
-    res.json(messages);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/groups/:groupId/messages', authMiddleware, async (req, res) => {
-  try {
-    const group = await Group.findOne({ _id: req.params.groupId, members: req.user._id });
-    if (!group) return res.status(404).json({ error: 'Group not found' });
-    const messages = await Message.find({ group: group._id })
-      .populate('sender', 'name username profilePic verified ownerBadge')
-      .sort({ createdAt: 1 });
-    res.json(messages);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/messages/:messageId', authMiddleware, async (req, res) => {
-  try {
-    const message = await Message.findById(req.params.messageId);
-    if (!message) return res.status(404).json({ error: 'Message not found' });
-    // Check if user is sender, group admin, or group owner
-    if (message.sender.toString() === req.user._id.toString()) {
-      // sender can delete
-    } else if (message.group) {
-      const group = await Group.findById(message.group);
-      if (!group) return res.status(404).json({ error: 'Group not found' });
-      if (!group.admins.includes(req.user._id) && group.owner.toString() !== req.user._id.toString()) {
-        return res.status(403).json({ error: 'Not authorized' });
-      }
-    } else {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    await message.deleteOne();
-    // Notify group members to remove message from UI
-    if (message.group) {
-      io.to(`group_${message.group}`).emit('message deleted', { messageId: message._id });
-    } else if (message.chat) {
-      const chat = await Chat.findById(message.chat);
-      if (chat) {
-        const other = chat.participants.find(p => p.toString() !== req.user._id.toString());
-        if (other) {
-          io.to(other.toString()).emit('message deleted', { messageId: message._id });
-        }
-      }
-    }
-    res.json({ message: 'Message deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---- Bot ----
-app.post('/api/bot/login', async (req, res) => {
-  if (req.body.password !== BOT_SECRET) return res.status(401).json({ error: 'Invalid bot credentials' });
-  let bot = await User.findOne({ isBot: true });
-  if (!bot) {
-    bot = new User({
-      name: 'Swarg Social Bot',
-      username: 'swargbot',
-      password: Math.random().toString(36),
-      ssn: '+1(212)908-0000',
-      isBot: true,
-      verified: true,
-      ownerBadge: false
-    });
-    await bot.save();
-  }
-  res.json({ token: generateToken(bot), user: { ...bot.toObject(), password: undefined } });
-});
-
-app.post('/api/bot/broadcast', authMiddleware, async (req, res) => {
-  if (!req.user.isBot) return res.status(403).json({ error: 'Only bot can broadcast' });
-  io.emit('system notification', { message: req.body.message, from: 'Swarg Social Bot' });
-  res.json({ success: true });
-});
-
-// Catch‑all
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+    // Notify added members
+    for (const memberId of allMembers) {
+      if (memberId.toString() !== req.user._id) {
+        const notification = new Notification({
+          user: membe
