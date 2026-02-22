@@ -7,6 +7,8 @@
   --text: #ffffff;
   --text-secondary: rgba(255, 255, 255, 0.7);
   --card-bg: rgba(15, 23, 42, 0.8);
+  --fab-bg: #6366f1;
+  --fab-color: white;
 }
 
 * {
@@ -23,6 +25,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
 }
 
 #app {
@@ -32,7 +35,7 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: transparent;
   position: relative;
   overflow: hidden;
 }
@@ -201,7 +204,7 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: transparent;
 }
 
 .app-header {
@@ -219,6 +222,7 @@ body {
   overflow-y: auto;
   padding: 10px;
   scroll-behavior: smooth;
+  margin-bottom: 70px; /* space for FAB and bottom nav */
 }
 
 .bottom-nav {
@@ -228,6 +232,11 @@ body {
   margin: 10px;
   background: var(--glass);
   backdrop-filter: blur(12px);
+  position: fixed;
+  bottom: 0;
+  width: 100%;
+  max-width: 450px;
+  z-index: 100;
 }
 .nav-item {
   background: none;
@@ -243,6 +252,30 @@ body {
 }
 .nav-item span { font-size: 0.7rem; }
 .nav-item.active { color: var(--primary); }
+
+/* Floating Action Button */
+.fab {
+  position: fixed;
+  bottom: 80px;
+  right: 20px;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--fab-bg);
+  color: var(--fab-color);
+  border: none;
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 10px rgba(99, 102, 241, 0.5);
+  cursor: pointer;
+  z-index: 200;
+  transition: transform 0.2s;
+}
+.fab:active {
+  transform: scale(0.9);
+}
 
 /* Badges */
 .verified-badge {
@@ -317,6 +350,10 @@ body {
   padding: 15px;
   margin-bottom: 15px;
   border: 1px solid var(--border);
+  transition: transform 0.2s;
+}
+.post-card:hover {
+  transform: translateY(-2px);
 }
 .post-header {
   display: flex;
@@ -352,33 +389,6 @@ body {
 }
 .post-actions .liked { color: var(--accent); }
 .like-count, .comment-count { font-size: 0.9rem; }
-
-/* Create post */
-.create-post-card {
-  background: var(--card-bg);
-  border-radius: 20px;
-  padding: 20px;
-  margin-bottom: 20px;
-}
-.create-post-card textarea {
-  width: 100%;
-  background: var(--glass);
-  border: 1px solid var(--border);
-  border-radius: 15px;
-  padding: 15px;
-  color: var(--text);
-  resize: none;
-  font-size: 1rem;
-  outline: none;
-}
-.create-post-actions {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 15px;
-  align-items: center;
-}
-.media-preview { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
-.media-preview img { width: 80px; height: 80px; border-radius: 10px; object-fit: cover; }
 
 /* Search */
 .search-box {
@@ -525,6 +535,7 @@ body {
   padding: 10px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  position: relative;
 }
 .chat-item:last-child { border-bottom: none; }
 .chat-item img {
@@ -536,6 +547,20 @@ body {
 .chat-name { font-weight: 600; display: flex; align-items: center; gap: 5px; }
 .chat-last { font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-time { font-size: 0.7rem; color: var(--text-secondary); }
+.unread-badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background: var(--accent);
+  color: white;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+}
 
 .chat-window {
   display: flex;
@@ -642,6 +667,7 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--card-bg);
+  border-radius: 20px;
 }
 .modal-header {
   display: flex;
@@ -697,6 +723,91 @@ body {
   border-radius: 20px;
 }
 
+/* Edit Profile Modal */
+.edit-profile .profile-pic-edit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.edit-profile .profile-pic-edit img {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--primary);
+}
+.edit-profile .form-group {
+  margin-bottom: 15px;
+}
+.edit-profile .form-group label {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.edit-profile .form-group input,
+.edit-profile .form-group textarea,
+.edit-profile .form-group select {
+  width: 100%;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  color: var(--text);
+  outline: none;
+}
+.edit-profile .form-group textarea {
+  resize: vertical;
+}
+
+/* Settings Modal */
+.setting-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+.setting-item:hover {
+  background: var(--glass);
+}
+.setting-item i {
+  width: 20px;
+  color: var(--primary);
+}
+
+/* Notifications */
+.notification-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.notification-item.unread {
+  background: rgba(99, 102, 241, 0.1);
+}
+.notification-item img {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.notification-content {
+  flex: 1;
+}
+.notification-text {
+  font-size: 0.9rem;
+}
+.notification-time {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
 /* Custom Popup */
 .popup-content {
   max-width: 350px;
@@ -731,28 +842,7 @@ body {
   display: none;
 }
 
-/* Settings */
-.settings-card {
-  background: var(--card-bg);
-  border-radius: 20px;
-  padding: 20px;
-  margin-top: 20px;
-}
-.setting-item { margin-bottom: 20px; }
-.setting-item label { display: block; margin-bottom: 5px; color: var(--text-secondary); }
-.setting-item input, .setting-item textarea, .setting-item select {
-  width: 100%;
-  background: var(--glass);
-  border: 1px solid var(--border);
-  border-radius: 15px;
-  padding: 12px;
-  color: var(--text);
-  outline: none;
-}
-.setting-item textarea {
-  resize: vertical;
-  min-height: 60px;
-}
+/* Danger Zone */
 .danger-zone {
   border: 1px solid var(--accent);
   border-radius: 15px;
@@ -814,4 +904,4 @@ body {
   .message img {
     max-width: 100px;
   }
-  }
+}
