@@ -72,10 +72,10 @@ function formatDateHeader(dateString) {
 // Default avatar generator
 function getAvatarHtml(user, size = 40) {
   if (user.profilePic) {
-    return `<img src="${user.profilePic}" class="avatar" style="width:${size}px; height:${size}px;">`;
+    return `<img src="${user.profilePic}" class="avatar" style="width:${size}px; height:${size}px; border-radius:50%; object-fit:cover;">`;
   } else {
     const initial = user.name ? user.name.charAt(0).toUpperCase() : '?';
-    return `<div class="default-avatar" style="width:${size}px; height:${size}px; background: var(--primary); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">${initial}</div>`;
+    return `<div class="default-avatar" style="width:${size}px; height:${size}px; background: linear-gradient(135deg, var(--primary), var(--primary-dark)); border-radius:50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: white;">${initial}</div>`;
   }
 }
 
@@ -142,9 +142,7 @@ window.addEventListener('popstate', (event) => {
       loadView(prevState.view, prevState.param, false);
     }
   } else {
-    // If at root, maybe exit app? For web, we can show a popup
     showPopup('Press back again to exit', 'info');
-    // Push a dummy state to allow second back to exit
     history.pushState({ view: 'dummy' }, '');
   }
 });
@@ -294,7 +292,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.openCreateGroup = () => {
     document.getElementById('new-chat-modal').classList.remove('active');
     document.getElementById('create-group-modal').classList.add('active');
-    loadContactsForGroup();
   };
 
   window.openAddContact = () => {
@@ -367,6 +364,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       btn.disabled = false;
     }
   });
+
+  // Group creation: member search
+  document.getElementById('member-search')?.addEventListener('input', debounce(searchMembers, 500));
+  window.selectedMembers = [];
 });
 
 function showAuth() {
@@ -393,7 +394,6 @@ function initApp() {
       item.classList.add('active');
       const view = item.dataset.view;
       loadView(view);
-      // Hide FAB on non-feed views
       if (view === 'feed') fabCreate.classList.remove('hidden');
       else fabCreate.classList.add('hidden');
     });
@@ -402,42 +402,17 @@ function initApp() {
   loadView('feed');
   pushHistory('feed');
 
-  if (currentUser?.isBot) {
-    const header = document.querySelector('.app-header');
-    const botBtn = document.createElement('button');
-    botBtn.className = 'btn-icon';
-    botBtn.innerHTML = '<i class="fas fa-robot"></i>';
-    botBtn.onclick = () => document.getElementById('bot-modal').classList.add('active');
-    header.appendChild(botBtn);
-
-    document.getElementById('send-broadcast').addEventListener('click', async () => {
-      const msg = document.getElementById('broadcast-message').value;
-      if (!msg) return;
-      try {
-        await apiRequest('/api/bot/broadcast', {
-          method: 'POST',
-          body: JSON.stringify({ message: msg })
-        });
-        showPopup('Broadcast sent!', 'success');
-        document.getElementById('bot-modal').classList.remove('active');
-        document.getElementById('broadcast-message').value = '';
-      } catch (err) {
-        showPopup(err.message, 'error');
-      }
-    });
-  }
-
   document.getElementById('save-contact').addEventListener('click', async () => {
-    const ssn = document.getElementById('contact-ssn').value.trim();
+    const identifier = document.getElementById('contact-identifier').value.trim();
     const nickname = document.getElementById('contact-nickname').value.trim();
-    if (!ssn) return showPopup('Enter SSN', 'warning');
+    if (!identifier) return showPopup('Enter username or SSN', 'warning');
     try {
       await apiRequest('/api/contacts', {
         method: 'POST',
-        body: JSON.stringify({ contactSsn: ssn, nickname })
+        body: JSON.stringify({ identifier, nickname })
       });
       document.getElementById('add-contact-modal').classList.remove('active');
-      document.getElementById('contact-ssn').value = '';
+      document.getElementById('contact-identifier').value = '';
       document.getElementById('contact-nickname').value = '';
       showPopup('Contact added', 'success');
       if (document.getElementById('chats-view')?.classList.contains('active')) {
@@ -450,20 +425,35 @@ function initApp() {
 
   document.getElementById('create-group-btn').addEventListener('click', async () => {
     const name = document.getElementById('group-name').value.trim();
+    const dpBase64 = window.groupDpBase64;
+    const members = window.selectedMembers || [];
     if (!name) return showPopup('Enter group name', 'warning');
-    const selected = document.querySelectorAll('#contact-select-list input:checked');
-    const members = Array.from(selected).map(cb => cb.value);
     try {
       await apiRequest('/api/groups', {
         method: 'POST',
-        body: JSON.stringify({ name, members })
+        body: JSON.stringify({ name, dp: dpBase64, members })
       });
       document.getElementById('create-group-modal').classList.remove('active');
       document.getElementById('group-name').value = '';
+      document.getElementById('group-dp-create-preview').innerHTML = '';
+      window.groupDpBase64 = null;
+      window.selectedMembers = [];
       showPopup('Group created', 'success');
       loadView('chats');
     } catch (err) {
       showPopup(err.message, 'error');
+    }
+  });
+
+  document.getElementById('group-dp-create')?.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        window.groupDpBase64 = reader.result;
+        document.getElementById('group-dp-create-preview').innerHTML = `<img src="${reader.result}" style="max-width:100px; border-radius:10px;">`;
+      };
+      reader.readAsDataURL(file);
     }
   });
 }
@@ -471,6 +461,8 @@ function initApp() {
 async function loadView(view, param, addToHistory = true) {
   contentArea.innerHTML = '';
   unsavedChanges = false;
+  // Remove full-screen class if any
+  document.body.classList.remove('chat-fullscreen');
   if (view === 'feed') {
     await renderFeed();
     fabCreate.classList.remove('hidden');
@@ -516,7 +508,9 @@ async function loadStories() {
     ` + storiesData.map(s => `
       <div class="story-item" data-story-id="${s._id}">
         <div class="story-avatar">
-          <img src="${s.user.profilePic || ''}" onerror="this.style.display='none'; this.parentNode.innerHTML='<div class=\\'default-avatar\\' style=\\'width:60px;height:60px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold;\\'>${s.user.name.charAt(0).toUpperCase()}</div>';">
+          ${s.user.profilePic 
+            ? `<img src="${s.user.profilePic}">` 
+            : `<div class="default-avatar" style="width:60px;height:60px;">${s.user.name.charAt(0).toUpperCase()}</div>`}
         </div>
         <span class="story-name">${s.user.username}</span>
       </div>
@@ -617,7 +611,7 @@ function renderPost(post) {
       <div class="post-header" onclick="openProfile('${post.user._id}')">
         ${post.user.profilePic 
           ? `<img src="${post.user.profilePic}" class="post-avatar">` 
-          : `<div class="default-avatar post-avatar" style="background:var(--primary);">${post.user.name.charAt(0).toUpperCase()}</div>`}
+          : `<div class="default-avatar post-avatar" style="width:40px;height:40px;">${post.user.name.charAt(0).toUpperCase()}</div>`}
         <div>
           <div class="post-user">
             ${post.user.name}
@@ -689,8 +683,8 @@ async function loadCommentsModal(postId) {
     list.innerHTML = post.comments.map(c => `
       <div class="comment-item">
         ${c.user.profilePic 
-          ? `<img src="${c.user.profilePic}" class="comment-avatar" style="width:30px;height:30px;border-radius:50%;">` 
-          : `<div class="default-avatar" style="width:30px;height:30px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${c.user.name.charAt(0).toUpperCase()}</div>`}
+          ? `<img src="${c.user.profilePic}" style="width:30px;height:30px;border-radius:50%;">` 
+          : `<div class="default-avatar" style="width:30px;height:30px;">${c.user.name.charAt(0).toUpperCase()}</div>`}
         <div>
           <strong>@${c.user.username}</strong> ${c.text}
           <div class="comment-time">${formatTime(c.createdAt)}</div>
@@ -753,7 +747,7 @@ function displayUsers(users) {
     <div class="user-item" data-user-id="${u._id}">
       ${u.profilePic 
         ? `<img src="${u.profilePic}">` 
-        : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${u.name.charAt(0).toUpperCase()}</div>`}
+        : `<div class="default-avatar" style="width:50px;height:50px;">${u.name.charAt(0).toUpperCase()}</div>`}
       <div class="user-info">
         <h4>
           ${u.name}
@@ -823,7 +817,7 @@ async function loadNotifications() {
       <div class="notification-item ${n.read ? '' : 'unread'}" data-notification-id="${n._id}" data-type="${n.type}" data-from="${n.from?._id}" data-post="${n.post?._id}" data-group="${n.group?._id}">
         ${n.from?.profilePic 
           ? `<img src="${n.from.profilePic}">` 
-          : `<div class="default-avatar" style="width:40px;height:40px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${n.from?.name?.charAt(0).toUpperCase() || '?'}</div>`}
+          : `<div class="default-avatar" style="width:40px;height:40px;">${n.from?.name?.charAt(0).toUpperCase() || '?'}</div>`}
         <div class="notification-content">
           <div class="notification-text">${n.message}</div>
           <div class="notification-time">${formatTime(n.createdAt)}</div>
@@ -838,13 +832,11 @@ async function loadNotifications() {
         if (item.dataset.type === 'follow') {
           openProfile(item.dataset.from);
         } else if (item.dataset.type === 'like' || item.dataset.type === 'comment') {
-          // load post modal (simplified)
           showPopup('View post feature coming soon', 'info');
         } else if (item.dataset.type === 'message') {
           navigateToChat(item.dataset.from);
         } else if (item.dataset.type === 'group_message' || item.dataset.type === 'group_add' || item.dataset.type === 'group_admin') {
           loadView('chats');
-          // open group later
         }
         document.getElementById('notifications-modal').classList.remove('active');
       });
@@ -885,7 +877,7 @@ async function renderProfile(userId) {
           <div style="position: relative;">
             ${user.profilePic 
               ? `<img src="${user.profilePic}" class="profile-avatar">` 
-              : `<div class="default-avatar profile-avatar" style="background:var(--primary);">${user.name.charAt(0).toUpperCase()}</div>`}
+              : `<div class="default-avatar profile-avatar" style="width:80px;height:80px;">${user.name.charAt(0).toUpperCase()}</div>`}
             ${isOwn ? `<i class="fas fa-cog settings-icon" onclick="document.getElementById('settings-modal').classList.add('active')"></i>` : ''}
           </div>
           <div>
@@ -935,7 +927,7 @@ async function renderProfile(userId) {
             <div class="suggestion-item" onclick="openProfile('${s._id}')">
               ${s.profilePic 
                 ? `<img src="${s.profilePic}">` 
-                : `<div class="default-avatar" style="width:60px;height:60px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${s.name.charAt(0).toUpperCase()}</div>`}
+                : `<div class="default-avatar" style="width:60px;height:60px;">${s.name.charAt(0).toUpperCase()}</div>`}
               <span>${s.username}</span>
             </div>
           `).join('')}
@@ -952,12 +944,9 @@ async function renderProfile(userId) {
         await toggleFollow(userId, btn);
       });
       document.querySelector('.add-contact-btn').addEventListener('click', async () => {
-        document.getElementById('contact-ssn').value = user.ssn;
+        document.getElementById('contact-identifier').value = user.username;
         document.getElementById('add-contact-modal').classList.add('active');
       });
-    } else {
-      // Edit profile button is now the gear icon, but we already have settings icon
-      // The gear icon opens settings modal, which contains edit profile option
     }
 
     document.getElementById('followers-stat').addEventListener('click', () => showFollowList(userId, 'followers'));
@@ -993,7 +982,7 @@ async function showFollowList(userId, type) {
       <div class="user-item" data-user-id="${u._id}">
         ${u.profilePic 
           ? `<img src="${u.profilePic}">` 
-          : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${u.name.charAt(0).toUpperCase()}</div>`}
+          : `<div class="default-avatar" style="width:50px;height:50px;">${u.name.charAt(0).toUpperCase()}</div>`}
         <div class="user-info">
           <h4>
             ${u.name}
@@ -1122,7 +1111,7 @@ async function renderChats() {
         <div class="chats-list" id="chats-list"></div>
       </div>
       <div class="chat-window hidden" id="chat-window">
-        <div class="chat-header" id="chat-header">
+        <div class="chat-header">
           <button class="btn-icon" id="back-from-chat"><i class="fas fa-arrow-left"></i></button>
           <div id="chat-header-info"></div>
         </div>
@@ -1142,15 +1131,13 @@ async function renderChats() {
   });
 
   document.getElementById('back-from-chat').addEventListener('click', () => {
-    // Go back to chats list
     document.getElementById('chat-window').classList.add('hidden');
     document.getElementById('chats-list-container').classList.remove('hidden');
     currentChatUser = null;
     currentGroup = null;
     activeChatId = null;
     activeGroupId = null;
-    // Update history
-    historyStack.pop(); // remove chat state
+    document.body.classList.remove('chat-fullscreen');
     loadView('chats', null, false);
   });
 
@@ -1210,7 +1197,7 @@ async function loadAllChats() {
           <div class="chat-item" data-chat-id="${item._id}" data-user-id="${item.otherUser?._id}" data-type="chat">
             ${item.otherUser?.profilePic 
               ? `<img src="${item.otherUser.profilePic}">` 
-              : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${item.otherUser?.name?.charAt(0).toUpperCase() || '?'}</div>`}
+              : `<div class="default-avatar" style="width:50px;height:50px;">${item.otherUser?.name?.charAt(0).toUpperCase() || '?'}</div>`}
             <div class="chat-info">
               <div class="chat-name">
                 ${item.otherUser?.name || 'Unknown'}
@@ -1228,7 +1215,7 @@ async function loadAllChats() {
           <div class="chat-item" data-group-id="${item._id}" data-type="group">
             ${item.dp 
               ? `<img src="${item.dp}">` 
-              : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${item.name.charAt(0).toUpperCase()}</div>`}
+              : `<div class="default-avatar" style="width:50px;height:50px;">${item.name.charAt(0).toUpperCase()}</div>`}
             <div class="chat-info">
               <div class="chat-name">${item.name}</div>
               <div class="chat-last">${item.lastMessage?.content || 'No messages'}</div>
@@ -1250,7 +1237,7 @@ async function loadGroupsList() {
       <div class="chat-item" data-group-id="${g._id}" data-type="group">
         ${g.dp 
           ? `<img src="${g.dp}">` 
-          : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${g.name.charAt(0).toUpperCase()}</div>`}
+          : `<div class="default-avatar" style="width:50px;height:50px;">${g.name.charAt(0).toUpperCase()}</div>`}
         <div class="chat-info">
           <div class="chat-name">${g.name}</div>
           <div class="chat-last">${g.lastMessage?.content || 'No messages'}</div>
@@ -1270,7 +1257,7 @@ async function loadContactsList() {
       <div class="chat-item" data-user-id="${c.contact._id}" data-type="contact">
         ${c.contact.profilePic 
           ? `<img src="${c.contact.profilePic}">` 
-          : `<div class="default-avatar" style="width:50px;height:50px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${c.contact.name.charAt(0).toUpperCase()}</div>`}
+          : `<div class="default-avatar" style="width:50px;height:50px;">${c.contact.name.charAt(0).toUpperCase()}</div>`}
         <div class="chat-info">
           <div class="chat-name">
             ${c.nickname || c.contact.name}
@@ -1309,6 +1296,7 @@ async function openChat(otherUserId, chatId, addToHistory = true) {
 
   document.getElementById('chats-list-container').classList.add('hidden');
   document.getElementById('chat-window').classList.remove('hidden');
+  document.body.classList.add('chat-fullscreen');
 
   if (!chatId) {
     const chats = await apiRequest('/api/chats');
@@ -1331,14 +1319,14 @@ async function openChat(otherUserId, chatId, addToHistory = true) {
   document.getElementById('chat-header-info').innerHTML = `
     ${otherUser.profilePic 
       ? `<img src="${otherUser.profilePic}" style="width:40px;height:40px;border-radius:50%;">` 
-      : `<div class="default-avatar" style="width:40px;height:40px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${otherUser.name.charAt(0).toUpperCase()}</div>`}
+      : `<div class="default-avatar" style="width:40px;height:40px;">${otherUser.name.charAt(0).toUpperCase()}</div>`}
     <div>
       <strong>${otherUser.name}</strong>
       ${otherUser.verified ? '<span class="verified-badge">✓</span>' : ''}
       ${otherUser.ownerBadge ? '<span class="owner-badge">👑</span>' : ''}
     </div>
   `;
-  documet.getElementById('send-chat').onclick = sendPrivateMessage;
+  document.getElementById('send-chat').onclick = sendPrivateMessage;
   document.getElementById('chat-input').onkeypress = (e) => {
     if (e.key === 'Enter') sendPrivateMessage();
   };
@@ -1355,6 +1343,7 @@ async function openGroup(groupId, addToHistory = true) {
 
   document.getElementById('chats-list-container').classList.add('hidden');
   document.getElementById('chat-window').classList.remove('hidden');
+  document.body.classList.add('chat-fullscreen');
 
   const msgs = await apiRequest(`/api/groups/${groupId}/messages`);
   renderMessages(msgs, 'group');
@@ -1365,14 +1354,14 @@ async function openGroup(groupId, addToHistory = true) {
   document.getElementById('chat-header-info').innerHTML = `
     ${group.dp 
       ? `<img src="${group.dp}" style="width:40px;height:40px;border-radius:50%;">` 
-      : `<div class="default-avatar" style="width:40px;height:40px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;">${group.name.charAt(0).toUpperCase()}</div>`}
+      : `<div class="default-avatar" style="width:40px;height:40px;">${group.name.charAt(0).toUpperCase()}</div>`}
     <div>
-      <strong>${group.name}</strong>
+      <strong id="group-name-header">${group.name}</strong>
       ${group.admins?.includes(currentUser._id) ? ' (Admin)' : ''}
     </div>
-    <button class="btn-icon" id="group-settings-btn"><i class="fas fa-cog"></i></button>
   `;
-  document.getElementById('group-settings-btn').addEventListener('click', () => openGroupSettings(group));
+  document.getElementById('group-name-header').style.cursor = 'pointer';
+  document.getElementById('group-name-header').onclick = () => openGroupInfo(group);
   document.getElementById('send-chat').onclick = sendGroupMessage;
   document.getElementById('chat-input').onkeypress = (e) => {
     if (e.key === 'Enter') sendGroupMessage();
@@ -1395,7 +1384,7 @@ function renderMessages(messages, type) {
     const timeStr = formatExactTime(m.createdAt);
     return headerHtml + `
       <div class="message ${isOwn ? 'own' : ''}" data-message-id="${m._id}">
-        ${!isOwn && type === 'group' ? (m.sender.profilePic ? `<img src="${m.sender.profilePic}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;background:var(--primary);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;">${m.sender.name.charAt(0).toUpperCase()}</div>`) : ''}
+        ${!isOwn && type === 'group' ? (m.sender.profilePic ? `<img src="${m.sender.profilePic}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;display:inline-flex;">${m.sender.name.charAt(0).toUpperCase()}</div>`) : ''}
         ${!isOwn && type === 'group' ? `<strong>${m.sender.name}</strong> ` : ''}
         ${m.content}
         ${m.media && m.media.length ? `<img src="${m.media[0].url}" style="max-width:150px;border-radius:10px;display:block;">` : ''}
@@ -1414,7 +1403,6 @@ async function deleteMessage(messageId) {
     if (confirmed) {
       try {
         await apiRequest(`/api/messages/${messageId}`, { method: 'DELETE' });
-        // Message will be removed via socket event
       } catch (err) {
         showPopup(err.message, 'error');
       }
@@ -1481,7 +1469,7 @@ function handleIncomingPrivateMessage(data) {
     const container = document.getElementById('chat-messages');
     container.innerHTML += `
       <div class="message">
-        ${data.fromAvatar ? `<img src="${data.fromAvatar}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;background:var(--primary);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;">${data.fromName.charAt(0).toUpperCase()}</div>`}
+        ${data.fromAvatar ? `<img src="${data.fromAvatar}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;display:inline-flex;">${data.fromName.charAt(0).toUpperCase()}</div>`}
         <strong>${data.fromName}</strong> ${data.content}
         ${data.media && data.media.length ? `<img src="${data.media[0].url}" style="max-width:150px;border-radius:10px;display:block;">` : ''}
         <span class="message-time">${formatExactTime(data.createdAt)}</span>
@@ -1500,7 +1488,7 @@ function handleIncomingGroupMessage(data) {
     const container = document.getElementById('chat-messages');
     container.innerHTML += `
       <div class="message">
-        ${data.fromAvatar ? `<img src="${data.fromAvatar}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;background:var(--primary);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;">${data.fromName.charAt(0).toUpperCase()}</div>`}
+        ${data.fromAvatar ? `<img src="${data.fromAvatar}" style="width:20px;height:20px;border-radius:50%;margin-right:5px;">` : `<div class="default-avatar" style="width:20px;height:20px;display:inline-flex;">${data.fromName.charAt(0).toUpperCase()}</div>`}
         <strong>${data.fromName}</strong> ${data.content}
         ${data.media && data.media.length ? `<img src="${data.media[0].url}" style="max-width:150px;border-radius:10px;display:block;">` : ''}
         <span class="message-time">${formatExactTime(data.createdAt)}</span>
@@ -1513,6 +1501,48 @@ function handleIncomingGroupMessage(data) {
       else loadGroupsList();
     }
   }
+}
+
+// Group info modal
+function openGroupInfo(group) {
+  const modal = document.getElementById('group-info-modal');
+  document.getElementById('group-info-name').textContent = group.name;
+  document.getElementById('group-info-dp').src = group.dp || '';
+  document.getElementById('group-info-owner').textContent = group.owner.name;
+  document.getElementById('group-info-member-count').textContent = group.members.length;
+  let membersHtml = '<h4>Members</h4>';
+  group.members.forEach(m => {
+    membersHtml += `<div>${m.name} ${group.admins.includes(m._id) ? '(Admin)' : ''}</div>`;
+  });
+  document.getElementById('group-info-members').innerHTML = membersHtml;
+  const isAdmin = group.admins.includes(currentUser._id);
+  const isOwner = group.owner._id === currentUser._id;
+  const actionsDiv = document.getElementById('group-admin-actions');
+  if (isAdmin || isOwner) {
+    actionsDiv.classList.remove('hidden');
+    document.getElementById('group-edit-btn').onclick = () => {
+      modal.classList.remove('active');
+      openGroupSettings(group);
+    };
+    document.getElementById('group-delete-btn').onclick = async () => {
+      if (!isOwner) return showPopup('Only owner can delete group', 'warning');
+      showPopup('Delete this group permanently?', 'confirm', async (confirmed) => {
+        if (confirmed) {
+          try {
+            await apiRequest(`/api/groups/${group._id}`, { method: 'DELETE' });
+            showPopup('Group deleted', 'success');
+            modal.classList.remove('active');
+            loadView('chats');
+          } catch (err) {
+            showPopup(err.message, 'error');
+          }
+        }
+      });
+    };
+  } else {
+    actionsDiv.classList.add('hidden');
+  }
+  modal.classList.add('active');
 }
 
 // Group settings
@@ -1540,7 +1570,7 @@ async function openGroupSettings(group) {
     const memberIsAdmin = group.admins.includes(member._id);
     membersList.innerHTML += `
       <div class="user-item">
-        ${member.profilePic ? `<img src="${member.profilePic}" width="30">` : `<div class="default-avatar" style="width:30px;height:30px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;">${member.name.charAt(0).toUpperCase()}</div>`}
+        ${member.profilePic ? `<img src="${member.profilePic}" width="30">` : `<div class="default-avatar" style="width:30px;height:30px;">${member.name.charAt(0).toUpperCase()}</div>`}
         <span>${member.name} ${memberIsAdmin ? '(Admin)' : ''}</span>
         ${isAdmin && member._id !== currentUser._id ? `
           <button class="btn-secondary promote-admin" data-user-id="${member._id}">Make Admin</button>
@@ -1675,20 +1705,48 @@ function copyInviteLink() {
   showPopup('Invite link copied!', 'success');
 }
 
-async function loadContactsForGroup() {
+// Member search for group creation
+async function searchMembers() {
+  const query = document.getElementById('member-search').value.trim();
+  if (query.length < 2) return;
   try {
-    const contacts = await apiRequest('/api/contacts');
-    const container = document.getElementById('contact-select-list');
-    container.innerHTML = contacts.map(c => `
-      <div>
-        <input type="checkbox" id="contact-${c.contact._id}" value="${c.contact._id}">
-        <label for="contact-${c.contact._id}">${c.nickname || c.contact.name}</label>
+    const users = await apiRequest(`/api/users/search?q=${encodeURIComponent(query)}`);
+    const resultsDiv = document.getElementById('member-search-results');
+    resultsDiv.innerHTML = users.map(u => `
+      <div class="member-result-item" data-user-id="${u._id}" data-name="${u.name}">
+        ${u.profilePic ? `<img src="${u.profilePic}" width="30">` : `<div class="default-avatar" style="width:30px;height:30px;">${u.name.charAt(0).toUpperCase()}</div>`}
+        <span>${u.name} (@${u.username})</span>
       </div>
     `).join('');
-  } catch (err) {
-    showPopup(err.message, 'error');
-  }
+    document.querySelectorAll('.member-result-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const userId = item.dataset.userId;
+        const name = item.dataset.name;
+        if (!window.selectedMembers) window.selectedMembers = [];
+        if (!window.selectedMembers.includes(userId)) {
+          window.selectedMembers.push(userId);
+          updateSelectedMembers();
+        }
+        document.getElementById('member-search').value = '';
+        document.getElementById('member-search-results').innerHTML = '';
+      });
+    });
+  } catch (err) { showPopup(err.message, 'error'); }
 }
+
+function updateSelectedMembers() {
+  const container = document.getElementById('selected-members');
+  container.innerHTML = window.selectedMembers.map(id => `
+    <span class="selected-member-tag" data-user-id="${id}">
+      ${id} <i class="fas fa-times" onclick="removeSelectedMember('${id}')"></i>
+    </span>
+  `).join('');
+}
+
+window.removeSelectedMember = (userId) => {
+  window.selectedMembers = window.selectedMembers.filter(id => id !== userId);
+  updateSelectedMembers();
+};
 
 // ==================== Navigation Helpers ====================
 async function navigateToChat(userId) {
@@ -1700,8 +1758,7 @@ function openProfile(userId) {
   loadView('profile', userId);
 }
 
-// Make functions global for onclick attributes
+// Make functions global
 window.openProfile = openProfile;
 window.deleteMessage = deleteMessage;
 window.openEditProfileModal = openEditProfileModal;
-    
