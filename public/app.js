@@ -12,7 +12,7 @@ let stories = [];
 let unsavedChanges = false;
 
 // DOM Elements (cached after login)
-let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, headerLogout;
+let loadingEl, authContainer, mainContainer, contentArea, bottomNavItems, headerLogout, fabCreate;
 
 // ==================== Helper Functions ====================
 function showLoading() { loadingEl?.classList.remove('hidden'); }
@@ -126,6 +126,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   contentArea = document.getElementById('content-area');
   bottomNavItems = document.querySelectorAll('.nav-item');
   headerLogout = document.getElementById('logout-btn');
+  fabCreate = document.getElementById('fab-create');
 
   if (getToken()) {
     try {
@@ -245,10 +246,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     showPopup('SSN copied to clipboard!', 'success');
   });
 
-  headerLogout?.addEventListener('click', () => {
+  // Logout via settings modal
+  window.logout = () => {
     setToken(null);
     window.location.reload();
-  });
+  };
 
   document.querySelectorAll('.close-modal').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -258,6 +260,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Edit profile modal save
   document.getElementById('save-profile')?.addEventListener('click', saveProfile);
+  document.getElementById('change-pic-btn')?.addEventListener('click', () => {
+    document.getElementById('edit-dp').click();
+  });
   document.getElementById('edit-dp')?.addEventListener('change', handleEditDp);
   document.getElementById('delete-account-btn')?.addEventListener('click', deleteAccount);
 
@@ -265,6 +270,58 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('generate-invite')?.addEventListener('click', generateInviteLink);
   document.getElementById('update-group')?.addEventListener('click', updateGroup);
   document.getElementById('copy-invite')?.addEventListener('click', copyInviteLink);
+
+  // FAB click
+  fabCreate?.addEventListener('click', () => {
+    document.getElementById('create-post-modal').classList.add('active');
+  });
+
+  // Create post modal
+  document.getElementById('attach-media').addEventListener('click', () => {
+    document.getElementById('post-media').click();
+  });
+  document.getElementById('post-media').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        document.getElementById('post-media-preview').innerHTML = `<img src="${reader.result}" style="max-width:100px; border-radius:10px;">`;
+        window.postMediaBase64 = reader.result;
+        unsavedChanges = true;
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+  document.getElementById('submit-post').addEventListener('click', async () => {
+    const content = document.getElementById('post-content').value;
+    const mediaBase64 = window.postMediaBase64;
+    if (!content && !mediaBase64) return;
+    const media = mediaBase64 ? [{ url: mediaBase64, type: 'image' }] : [];
+    const btn = document.getElementById('submit-post');
+    const originalText = btn.textContent;
+    btn.textContent = 'Posting...';
+    btn.disabled = true;
+    try {
+      await apiRequest('/api/posts', { method: 'POST', body: JSON.stringify({ content, media }) });
+      document.getElementById('post-content').value = '';
+      document.getElementById('post-media-preview').innerHTML = '';
+      delete window.postMediaBase64;
+      unsavedChanges = false;
+      showPopup('Post created!', 'success');
+      document.getElementById('create-post-modal').classList.remove('active');
+      loadView('feed');
+    } catch (err) {
+      showPopup(err.message, 'error');
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  });
+
+  // Settings button on profile
+  document.getElementById('settings-btn')?.addEventListener('click', () => {
+    document.getElementById('settings-modal').classList.add('active');
+  });
 });
 
 function showAuth() {
@@ -279,6 +336,7 @@ function initApp() {
   socket.on('private message', handleIncomingPrivateMessage);
   socket.on('group message', handleIncomingGroupMessage);
   socket.on('message deleted', handleMessageDeleted);
+  socket.on('new notification', handleNewNotification);
   socket.on('system notification', (data) => {
     showPopup(`🔊 ${data.from}: ${data.message}`, 'info');
   });
@@ -364,7 +422,7 @@ async function loadView(view, param) {
   unsavedChanges = false;
   if (view === 'feed') await renderFeed();
   else if (view === 'search') renderSearch();
-  else if (view === 'create') renderCreate();
+  else if (view === 'notifications') await renderNotifications();
   else if (view === 'chats') await renderChats();
   else if (view === 'profile') await renderProfile(param || currentUser._id);
 }
@@ -492,8 +550,7 @@ function renderPost(post) {
   const liked = post.likes.includes(currentUser._id);
   const isOwn = post.user._id === currentUser._id;
   return `
-    <div class="post-card" data-post-id="${post._id}">
-      <div class="post-header" onclick="openProfile('${post.user._id}')">
+    <div class="post-header" onclick="openProfile('${post.user._id}')">
         <img src="${post.user.profilePic || 'https://via.placeholder.com/40'}" class="post-avatar">
         <div>
           <div class="post-user">
@@ -674,63 +731,66 @@ async function handleSearch() {
   } catch (err) { showPopup(err.message, 'error'); }
 }
 
-// ==================== Create Post ====================
-function renderCreate() {
+// ==================== Notifications ====================
+async function renderNotifications() {
   contentArea.innerHTML = `
-    <div class="view active" id="create-view">
-      <div class="create-post-card glass-card">
-        <textarea id="post-content" placeholder="What's on your mind?" rows="3" oninput="unsavedChanges=true"></textarea>
-        <div class="media-preview" id="media-preview"></div>
-        <div class="create-post-actions">
-          <input type="file" id="post-media" accept="image/*" hidden>
-          <button class="btn-secondary" id="attach-media"><i class="fas fa-image"></i> Add Image</button>
-          <button class="btn-primary" id="submit-post">Post</button>
-        </div>
-      </div>
+    <div class="view active" id="notifications-view">
+      <div id="notifications-container"></div>
     </div>
   `;
+  await loadNotifications();
+}
 
-  document.getElementById('attach-media').addEventListener('click', () => {
-    document.getElementById('post-media').click();
-  });
-
-  document.getElementById('post-media').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        document.getElementById('media-preview').innerHTML = `<img src="${reader.result}" style="max-width:100px; border-radius:10px;">`;
-        window.postMediaBase64 = reader.result;
-        unsavedChanges = true;
-      };
-      reader.readAsDataURL(file);
+async function loadNotifications() {
+  try {
+    const notifications = await apiRequest('/api/notifications');
+    const container = document.getElementById('notifications-container');
+    if (notifications.length === 0) {
+      container.innerHTML = '<p class="text-secondary">No notifications</p>';
+      return;
     }
-  });
+    container.innerHTML = notifications.map(n => `
+      <div class="notification-item ${n.read ? '' : 'unread'}" data-notification-id="${n._id}" data-type="${n.type}" data-from="${n.from?._id}" data-post="${n.post?._id}" data-group="${n.group?._id}">
+        <img src="${n.from?.profilePic || 'https://via.placeholder.com/40'}" alt="">
+        <div class="notification-content">
+          <div class="notification-text">${n.message}</div>
+          <div class="notification-time">${formatTime(n.createdAt)}</div>
+        </div>
+      </div>
+    `).join('');
+    // Mark as read when clicked
+    document.querySelectorAll('.notification-item').forEach(item => {
+      item.addEventListener('click', async () => {
+        const id = item.dataset.notificationId;
+        await apiRequest(`/api/notifications/${id}/read`, { method: 'POST' });
+        item.classList.remove('unread');
+        // Navigate based on type
+        if (item.dataset.type === 'follow') {
+          openProfile(item.dataset.from);
+        } else if (item.dataset.type === 'like' || item.dataset.type === 'comment') {
+          // load post modal (simplified)
+          showPopup('View post feature coming soon', 'info');
+        } else if (item.dataset.type === 'message') {
+          navigateToChat(item.dataset.from);
+        } else if (item.dataset.type === 'group_message' || item.dataset.type === 'group_add' || item.dataset.type === 'group_admin') {
+          loadView('chats');
+          // open group later
+        }
+        document.getElementById('notifications-modal').classList.remove('active');
+      });
+    });
+  } catch (err) {
+    showPopup(err.message, 'error');
+  }
+}
 
-  document.getElementById('submit-post').addEventListener('click', async () => {
-    const content = document.getElementById('post-content').value;
-    const mediaBase64 = window.postMediaBase64;
-    if (!content && !mediaBase64) return;
-    const media = mediaBase64 ? [{ url: mediaBase64, type: 'image' }] : [];
-    const btn = document.getElementById('submit-post');
-    const originalText = btn.textContent;
-    btn.textContent = 'Posting...';
-    btn.disabled = true;
-    try {
-      await apiRequest('/api/posts', { method: 'POST', body: JSON.stringify({ content, media }) });
-      document.getElementById('post-content').value = '';
-      document.getElementById('media-preview').innerHTML = '';
-      delete window.postMediaBase64;
-      unsavedChanges = false;
-      showPopup('Post created!', 'success');
-      loadView('feed');
-    } catch (err) {
-      showPopup(err.message, 'error');
-    } finally {
-      btn.textContent = originalText;
-      btn.disabled = false;
-    }
-  });
+function handleNewNotification(data) {
+  // Update badge or reload if notifications view open
+  if (document.getElementById('notifications-view')?.classList.contains('active')) {
+    loadNotifications();
+  } else {
+    // Show a small badge on nav icon (simplified – just reload when tab opened)
+  }
 }
 
 // ==================== Profile ====================
@@ -772,6 +832,10 @@ async function renderProfile(userId) {
                 <div class="stat-number">${user.followingCount || 0}</div>
                 <div class="stat-label">Following</div>
               </div>
+              <div class="stat">
+                <div class="stat-number">${user.postsCount || 0}</div>
+                <div class="stat-label">Posts</div>
+              </div>
             </div>
             ${!isOwn ? `<button class="follow-btn btn-primary" data-user-id="${userId}">${user.isFollowing ? 'Unfollow' : 'Follow'}</button>` : ''}
             ${isOwn ? `<button class="edit-profile-btn btn-secondary" id="open-edit-profile"><i class="fas fa-edit"></i> Edit Profile</button>` : ''}
@@ -803,6 +867,8 @@ async function renderProfile(userId) {
           `).join('')}
         </div>
         ` : ''}
+        
+        ${isOwn ? `<button class="btn-secondary" id="settings-btn" style="margin-top:10px; width:100%;"><i class="fas fa-cog"></i> Settings</button>` : ''}
       </div>
     `;
     contentArea.innerHTML = profileHtml;
@@ -819,6 +885,9 @@ async function renderProfile(userId) {
       });
     } else {
       document.getElementById('open-edit-profile').addEventListener('click', openEditProfileModal);
+      document.getElementById('settings-btn').addEventListener('click', () => {
+        document.getElementById('settings-modal').classList.add('active');
+      });
     }
 
     document.getElementById('followers-stat').addEventListener('click', () => showFollowList(userId, 'followers'));
@@ -888,7 +957,7 @@ function openEditProfileModal() {
   document.getElementById('edit-education').value = currentUser.education || '';
   document.getElementById('edit-location').value = currentUser.location || '';
   document.getElementById('edit-relationship').value = currentUser.relationship || '';
-  document.getElementById('edit-dp-preview').innerHTML = currentUser.profilePic ? `<img src="${currentUser.profilePic}" width="50">` : '';
+  document.getElementById('edit-profile-pic').src = currentUser.profilePic || 'https://via.placeholder.com/100';
   modal.classList.add('active');
 }
 
@@ -898,7 +967,7 @@ function handleEditDp(e) {
     const reader = new FileReader();
     reader.onload = () => {
       editDpBase64 = reader.result;
-      document.getElementById('edit-dp-preview').innerHTML = `<img src="${reader.result}" width="50" style="border-radius:10px;">`;
+      document.getElementById('edit-profile-pic').src = reader.result;
       unsavedChanges = true;
     };
     reader.readAsDataURL(file);
@@ -1053,6 +1122,7 @@ async function loadAllChats() {
               <div class="chat-last">${item.lastMessage?.content || 'No messages'}</div>
             </div>
             <div class="chat-time">${item.lastMessage ? formatTime(item.lastMessage.createdAt) : ''}</div>
+            ${item.unreadCount ? `<span class="unread-badge">${item.unreadCount}</span>` : ''}
           </div>
         `;
       } else {
@@ -1501,4 +1571,3 @@ function openProfile(userId) {
 // Make functions global for onclick attributes
 window.openProfile = openProfile;
 window.deleteMessage = deleteMessage;
- 
