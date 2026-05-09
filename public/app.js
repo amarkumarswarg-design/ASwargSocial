@@ -1,3 +1,10 @@
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then(reg => console.log('Swarg App Ready!', reg))
+      .catch(err => console.log('PWA Error:', err));
+  });
+}
 // ==================== Configuration ====================
 const API_BASE = '';
 let socket = null;
