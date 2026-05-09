@@ -1,8 +1,9 @@
 {
   "name": "Swarg Social",
   "short_name": "Swarg",
-  "description": "A premium social platform with messaging, stories, and groups.",
-  "start_url": "/",
+  "description": "A premium social platform",
+  "start_url": "https://swargsocial.hiamar.online/",
+  "scope": "https://swargsocial.hiamar.online/",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#6366f1",
